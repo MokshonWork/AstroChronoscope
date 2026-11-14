@@ -26,7 +26,10 @@ AstroChronoscope/
 │   ├── storage/               # runtime artifacts (git-ignored, .gitkeep only)
 │   ├── README.md              # detailed backend documentation
 │   ├── TODO.md                # phase checklists and validation logs
-│   ├── requirements.txt
+│   ├── pyproject.toml         # authoritative dependencies (Python 3.14, exact pins)
+│   ├── uv.lock                # lockfile resolved from pyproject.toml
+│   ├── requirements.txt       # generated pip-compatible export (hashes)
+│   ├── scripts/               # fresh-install integration check
 │   ├── pytest.ini
 │   └── .env.example
 ├── README.md                  # this file
@@ -36,10 +39,10 @@ AstroChronoscope/
 The frontend is a static SPA that talks to the backend over JSON. The backend is the only
 component that contacts IRSA; the browser never does.
 
-> Note: `backend/main.py`, `backend/pyproject.toml` and `backend/uv.lock` are the original
-> frontend-connection stub and are retained unchanged. The production backend entry point
-> is `backend/app/main.py` (run with `uvicorn app.main:app`), documented in
-> [`backend/README.md`](backend/README.md).
+> Note: `backend/main.py` is the original frontend-connection stub and is retained
+> unchanged for history. The production backend entry point is `backend/app/main.py`
+> (run with `uvicorn app.main:app`), and `backend/pyproject.toml` now describes the real
+> backend, documented in [`backend/README.md`](backend/README.md).
 
 ## Backend capabilities
 
@@ -99,19 +102,20 @@ The frontend is maintained separately; backend changes must not modify it.
 ```bash
 cd backend
 
-python -m venv .venv
-source .venv/bin/activate
-
-pip install -r requirements.txt
+uv sync                      # authoritative deps + lockfile (uv.lock)
 
 cp .env.example .env
 
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Python 3.14 is used in development. `scipy` is required for reprojection and convolution;
-`reproject`, `photutils` and `scikit-image` are deliberately not dependencies (see the
-backend README).
+`backend/pyproject.toml` is the single dependency source; `backend/uv.lock` is the
+lockfile and `backend/requirements.txt` is a generated pip-compatible export
+(`pip install -r requirements.txt` also works).
+
+Python 3.14 is required and pinned in `backend/pyproject.toml`. `scipy` is required for
+reprojection and convolution; `reproject`, `photutils` and `scikit-image` are
+deliberately not dependencies (see the backend README).
 
 ### API documentation
 
@@ -122,20 +126,28 @@ Interactive OpenAPI docs: <http://localhost:8000/docs>
 ```bash
 cd backend
 
-python -m pytest -q                 # deterministic suite, no network
-python -m compileall -q app tests   # byte-compile check
-python -m pyflakes app tests        # lint (if installed)
+uv run pytest -q                    # deterministic suite, no network
+uv run python -m compileall -q app tests scripts
+uv run python -m pyflakes app tests scripts
+```
+
+Fresh-install verification (throwaway venv, installs only from `uv.lock`, runs the
+integration check, the suite, compile and lint, and confirms the frontend is untouched):
+
+```bash
+cd backend
+./scripts/fresh_install_check.sh
 ```
 
 Live IRSA tests are opt-in and never run by default:
 
 ```bash
-RUN_LIVE=1 python -m pytest -q tests/test_live_integration.py \
+RUN_LIVE=1 uv run pytest -q tests/test_live_integration.py \
   tests/test_live_api_workflow.py tests/test_live_timeline.py \
   tests/test_live_image_comparison.py
 ```
 
-Current deterministic suite: **188 passed, 6 skipped** (the skips are the opt-in live
+Current deterministic suite: **223 passed, 6 skipped** (the skips are the opt-in live
 tests). Live validation on 2026-11-14 inspected a real SPHEREx product and compared two
 D3 epochs 33 days apart (all checks `PASS`, 89.2 % coverage, 0.03 px residual).
 

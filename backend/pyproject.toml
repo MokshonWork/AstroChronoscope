@@ -1,7 +1,35 @@
 [project]
-name = "backend"
-version = "0.1.0"
+name = "planetx-backend"
+version = "1.0.0"
+description = "Planet X (AstroChronoscope): SPHEREx observation discovery and scientific image comparison backend"
+readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi[standard]>=0.162.7",
+    # Web layer
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    "starlette==1.6.0",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    # HTTP client
+    "requests==2.33.1",
+    "urllib3==2.8.0",
+    # Scientific stack (pinned: these determine numerical behaviour)
+    "astropy==8.0.2",
+    "numpy==2.5.2",
+    "scipy==1.18.0",
+    "matplotlib==3.11.1",
+    "pillow==12.3.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "httpx==0.28.1",
+    "pyflakes==4.1.0",
+]
+
+[tool.uv]
+# The backend is an application, not a distributable package: `uv sync`
+# installs the dependency set only and never builds/installs this project.
+package = false

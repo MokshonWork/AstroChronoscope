@@ -138,20 +138,54 @@ not rows: for the validated target, 126 product rows collapse to **63 observatio
 
 ## 3. Setup
 
-Requires Python 3.11+ (verified on 3.14) and network access to `irsa.ipac.caltech.edu`.
+Requires **Python 3.14** (pinned in `pyproject.toml`; the suite and the fresh-install
+check were run on CPython 3.14.10) and network access to `irsa.ipac.caltech.edu`.
+
+### Dependency management (authoritative: `uv`)
+
+`pyproject.toml` is the single source of truth; `uv.lock` is the real lockfile and
+`requirements.txt` is a generated pip-compatible export. Do not edit `requirements.txt`
+or `uv.lock` by hand.
+
+| File | Role |
+|---|---|
+| `pyproject.toml` | Authoritative dependencies, exact `==` pins, `requires-python`, dev group |
+| `uv.lock` | Lockfile resolved from `pyproject.toml` (48 packages, all transitive deps) |
+| `requirements.txt` | Generated `uv export` with hashes, for `pip install -r` |
+
+Direct pins: `fastapi 0.141.1`, `starlette 1.6.0`, `pydantic 2.13.5`,
+`pydantic-settings 2.15.0`, `uvicorn[standard] 0.52.4`, `requests 2.33.1`,
+`urllib3 2.8.0`, `astropy 8.0.2`, `numpy 2.5.2`, `scipy 1.18.0`,
+`matplotlib 3.11.1`, `pillow 12.3.0`. Dev group: `pytest 9.1.1`, `httpx 0.28.1`,
+`pyflakes 4.1.0`. The scientific pins are exact because they determine numerical
+behaviour; upgrading them requires re-running the full suite and the live checks.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+cd backend
+uv sync                       # create .venv and install the locked dependency set
 cp .env.example .env          # optional
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Start the API:
+To regenerate the lock and the pip export after changing `pyproject.toml`:
 
 ```bash
+uv lock
+uv export --format requirements-txt --no-dev --no-emit-project --output-file requirements.txt
+```
+
+`uv sync --frozen` installs exactly `uv.lock` without re-resolving, and is what the
+fresh-install check uses. With plain `pip`:
+
+```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt   # hashes present; add --require-hashes to enforce
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+> `backend/main.py` is a legacy placeholder kept for history; the application entry
+> point is `app.main:app` and the project metadata lives in `backend/pyproject.toml`.
 
 - Swagger UI: `http://localhost:8000/docs`
 - OpenAPI JSON: `http://localhost:8000/openapi.json`
@@ -698,8 +732,11 @@ Response `200`, successful comparison (abridged):
   },
   "psf": {
     "fwhm_a_arcsec": 12.3, "fwhm_b_arcsec": 12.3, "ratio": 1.0,
-    "matching": "none", "matched": false, "status": "PASS",
-    "note": "PSF FWHM ratio 1.00; no PSF matching required"
+    "metadata_available_a": true, "metadata_available_b": true,
+    "verified": true, "matching": "none", "matched": false,
+    "matching_supported": false, "spatially_varying": false,
+    "method": null, "sigma_px": null, "status": "PASS",
+    "note": "PSF FWHM ratio 1.00; compatible within the warning threshold, no matching required"
   },
   "difference": {
     "fits_url": "/api/v1/files/<64-hex>.fits",
@@ -708,7 +745,8 @@ Response `200`, successful comparison (abridged):
     "mask_url": "/api/v1/files/<64-hex>.fits",
     "width": 64, "height": 64, "unit": "MJy / sr",
     "uncertainty_available": true,
-    "uncertainty_note": "Propagated 1-sigma uncertainty from both VARIANCE extensions (independent errors)",
+    "uncertainty_valid_fraction": 1.0,
+    "uncertainty_note": "Propagated 1-sigma uncertainty from both VARIANCE extensions (squared interpolation weights, independent per-pixel errors; covariance not modelled)",
     "statistics": {"valid_pixels": 3194, "valid_fraction": 0.78,
                    "min": -3.1e-05, "max": 1.0e-04, "mean": -1.8e-07,
                    "median": 9.1e-08, "std": 2.5e-05, "robust_sigma": 1.4e-06}
@@ -716,16 +754,22 @@ Response `200`, successful comparison (abridged):
   "quality": {
     "overall_status": "PASS",
     "checks": [
-      {"name": "fits_a", "status": "PASS", "message": "Science image A has usable pixels", "details": null},
-      {"name": "reprojection", "status": "PASS", "message": "Both products reprojected onto the reference grid", "details": null},
-      {"name": "coverage", "status": "PASS", "message": "Common valid coverage 78.0% of the output grid", "details": {"common_coverage_fraction": 0.7798}},
-      {"name": "alignment", "status": "PASS", "message": "Residual misalignment 0.13 px after reprojection", "details": {"residual_offset_px": 0.13, "verified": true}},
-      {"name": "background", "status": "PASS", "message": "…", "details": null},
-      {"name": "units", "status": "PASS", "message": "Compatible units (MJy / sr)", "details": null},
-      {"name": "photometric", "status": "PASS", "message": "…", "details": null},
-      {"name": "psf", "status": "PASS", "message": "…", "details": null},
-      {"name": "uncertainty", "status": "PASS", "message": "…", "details": null}
+      {"name": "fits_a", "status": "PASS", "critical": true, "message": "Science image A has usable pixels", "details": null},
+      {"name": "reprojection", "status": "PASS", "critical": true, "message": "Both products reprojected onto the reference grid", "details": null},
+      {"name": "coverage", "status": "PASS", "critical": true, "message": "Common valid coverage 78.0% of the output grid", "details": {"common_coverage_fraction": 0.7798}},
+      {"name": "alignment", "status": "PASS", "critical": true, "message": "Residual misalignment 0.13 px after reprojection", "details": {"residual_offset_px": 0.13, "verified": true}},
+      {"name": "background", "status": "PASS", "critical": true, "message": "…", "details": null},
+      {"name": "units", "status": "PASS", "critical": true, "message": "Compatible units (MJy / sr)", "details": null},
+      {"name": "photometric", "status": "PASS", "critical": true, "message": "…", "details": null},
+      {"name": "masking", "status": "PASS", "critical": true, "message": "FLAGS mask applied to both products…", "details": null},
+      {"name": "uncertainty", "status": "PASS", "critical": true, "message": "…", "details": null},
+      {"name": "psf", "status": "PASS", "critical": true, "message": "…", "details": null}
     ],
+    "critical_checks": ["fits_a", "fits_b", "wcs_a", "wcs_b", "reprojection", "coverage",
+                        "alignment", "background", "units", "photometric", "masking",
+                        "uncertainty", "psf"],
+    "failed_checks": [],
+    "unverified_checks": [],
     "warnings": []
   },
   "provenance": {
@@ -737,11 +781,17 @@ Response `200`, successful comparison (abridged):
     "reference_wcs": {"ctype": ["RA---TAN", "DEC--TAN"], "crval": [156.09328159, -41.64466331], "crpix": [32.5, 32.5], "shape": [64, 64], "pixel_scale_arcsec": 6.15},
     "background": {"correction": "median", "levels": [0.001, 0.001], "variation": [3e-06, 4e-06], "reliable": [true, true]},
     "photometric": {"method": "none", "scale_factor": 1.0, "units": ["MJy / sr", "MJy / sr"], "absolute_calibration": true},
-    "psf": {"matching": "none", "matched": false, "fwhm_arcsec": [12.3, 12.3], "ratio": 1.0},
+    "psf": {"matching": "none", "matched": false, "matching_supported": false,
+            "spatially_varying": false, "method": null, "sigma_px": null,
+            "verified": true, "metadata_available": [true, true],
+            "fwhm_arcsec": [12.3, 12.3], "ratio": 1.0, "status": "PASS"},
     "masking": {"science_invalid": "non-finite pixels and non-informational FLAGS bits (SOURCE/FULLSAMPLE excluded)",
                 "reprojection": "output pixel valid only if all contributing source pixels are valid",
                 "difference": "NaN outside the common valid footprint"},
-    "uncertainty": {"available": true, "model": "sigma_D^2 = sigma_b^2 + alpha^2 * sigma_a^2"},
+    "uncertainty": {"available": true, "model": "sigma_D^2 = sigma_b^2 + alpha^2 * sigma_a^2",
+                    "input_propagation": "V_out = sum_i w_i^2 V_i on the reference grid",
+                    "assumptions": "independent input-pixel noise; interpolation-correlated output noise not modelled",
+                    "covariance_modelled": false},
     "input_sha256": {"<id-A>": "…", "<id-B>": "…"},
     "quality": {"fits_a": "PASS", "alignment": "PASS", "coverage": "PASS", "units": "PASS", "psf": "PASS"},
     "cache_key": "61b6f48041f58fc2f70c513040785214…"
@@ -764,13 +814,44 @@ When a mandatory check fails, the request is still a valid request, so the respo
   "status": "rejected",
   "scientifically_valid": false,
   "difference": null,
-  "quality": {"overall_status": "FAIL", "checks": [{"name": "units", "status": "FAIL", "message": "BUNIT mismatch ('MJy / sr' vs 'Jy'); no supported conversion", "details": {"bunit_a": "MJy / sr", "bunit_b": "Jy"}}], "warnings": ["BUNIT mismatch …"]}
+  "quality": {"overall_status": "FAIL",
+              "checks": [{"name": "units", "critical": true, "status": "FAIL", "message": "BUNIT mismatch ('MJy / sr' vs 'Jy'); no supported conversion", "details": {"bunit_a": "MJy / sr", "bunit_b": "Jy"}}],
+              "critical_checks": ["fits_a", "fits_b", "wcs_a", "wcs_b", "reprojection", "coverage", "alignment", "background", "units", "photometric", "masking", "uncertainty", "psf"],
+              "failed_checks": ["units"], "unverified_checks": [],
+              "warnings": ["BUNIT mismatch …"]}
 }
 ```
 
 The failing checks are always listed; no image is written. Transport/validation errors
 (unknown id, size too large, pixel cap) use the normal error envelope with a non-200
 status.
+
+### Scientific validity (`scientifically_valid`)
+
+Every check reports `PASS`, `WARNING`, `FAIL` or `NOT_VERIFIED`, and carries
+`critical: true|false`. `scientifically_valid` is **derived, never asserted**:
+
+```text
+scientifically_valid = (status == "completed") AND
+                       every critical check has status == "PASS"
+```
+
+- `FAIL` on any critical check rejects the comparison (`status: "rejected"`, no
+  difference product).
+- `NOT_VERIFIED` on a critical check **blocks validity** but still returns the
+  computed difference, so the caller sees the data plus what could not be checked.
+- `WARNING` on a critical check also blocks validity (for example a PSF ratio between
+  the warning and failure thresholds, or `photometric_scaling="median_ratio"`).
+- Non-critical warnings never invalidate a comparison.
+
+Critical checks: `fits_a`, `fits_b`, `wcs_a`, `wcs_b`, `reprojection`, `coverage`,
+`alignment`, `background`, `units`, `photometric`, `masking`, `uncertainty`, `psf`.
+
+`NOT_VERIFIED` is returned when the evidence needed for a check is absent, not when the
+check failed: missing `BUNIT`, missing `FLAGS`, missing `VARIANCE`, missing `EPSF`,
+background correction disabled, relative photometric scaling, or an alignment that phase
+correlation cannot confirm. A computationally successful difference image is therefore
+never automatically reported as a scientifically valid comparison.
 
 **Pipeline semantics.**
 
@@ -783,8 +864,22 @@ status.
    reference image is copied untouched (`same_grid`) to avoid interpolation noise; the
    other is resampled. Pixels outside the source footprint stay `NaN`, never `0`.
 3. **Interpolation.** Bilinear by default on calibrated surface brightness (`MJy/sr`).
-   This is **not flux-conserving** for point-source photometry and is reported as
-   `flux_conserving: false`.
+   The taps and weights are computed explicitly (`_taps`) and reproduce
+   `scipy.ndimage.map_coordinates(order=1, mode="nearest")`; nearest-neighbour is
+   available via `config.interpolation`. This is **not flux-conserving** for point-source
+   photometry and is reported as `flux_conserving: false`.
+   - **Variance propagation.** A variance map is never interpolated as an image. With
+     interpolation weights `w_i` (normalized, `Σ w_i = 1`, after boundary clamping):
+     `V_out = Σ w_i² V_i`. Interpolating variance directly would give `Σ w_i V_i` and
+     overstate the noise of every averaged pixel.
+   - An output pixel is valid only if *every* source pixel with non-zero weight is valid;
+     otherwise the science value and its variance are `NaN` (never zero-filled).
+     Non-finite or negative source variance yields `NaN` variance while keeping a usable
+     science value; `variance_valid_fraction` reports how much of the footprint that
+     affects, and an incomplete fraction makes the `uncertainty` check `NOT_VERIFIED`.
+   - Propagation assumes independent input-pixel noise. Interpolation correlates
+     *neighbouring output* pixels even for white input noise; only the per-pixel variance
+     is propagated and **covariance is not modelled** (`covariance_modelled: false`).
 4. **Coverage.** The common valid fraction of the output grid must reach
    `MIN_COMMON_COVERAGE` (30%).
 5. **Alignment.** FFT phase correlation on the reprojected pair measures the residual
@@ -799,22 +894,33 @@ status.
    when units match, `alpha = 1`, and both products are `calib_level = 2`.
 8. **PSF.** FWHM comes from the real `EPSF` BINTABLE (median kernel, half-maximum width
    in samples, divided by the header `OVSMPX/OVSMPY` oversampling and multiplied by the
-   pixel scale). No oversampling → `fwhm_arcsec: null` + warning. Compatibility by FWHM
-   ratio: ≤ `PSF_WARN_RATIO` PASS, ≤ `PSF_FAIL_RATIO` WARNING, above FAIL. Optional
-   `psf_matching="gaussian"` convolves the sharper product with a normalized Gaussian
-   kernel to the broader FWHM (documented Gaussian approximation; white-noise variance
-   scaled by `1/(4πσ²)`); no convolution is claimed when the difference is < 0.05 px.
+   pixel scale). No oversampling → `fwhm_arcsec: null` + warning. The response separates
+   four different facts: `metadata_available_a/b` (an EPSF exists), `verified` (both
+   FWHMs were measured and compared), `matching_supported` (this implementation *can*
+   match) and `matched` (a convolution was actually applied). Compatibility by FWHM
+   ratio: ≤ `PSF_WARN_RATIO` PASS, ≤ `PSF_FAIL_RATIO` WARNING, above FAIL. Missing EPSF
+   metadata is `NOT_VERIFIED`, never `PASS`. Optional `psf_matching="gaussian"`
+   convolves the sharper product with a normalized Gaussian kernel to the broader FWHM
+   (`method: "global_gaussian_convolution"`, `sigma_px` reported). This is a **global,
+   Gaussian approximation of a spatially varying PSF**: the empirical kernel is not
+   resampled and spatial PSF variation is not modelled
+   (`spatially_varying: false`). A sub-0.05 px difference reports `matched: false`
+   because no convolution was applied.
 9. **Difference.** `D = I_b - alpha * I_a` only after all mandatory checks pass.
-   `sigma_D² = sigma_b² + alpha² sigma_a²` when both `VARIANCE` extensions exist;
-   otherwise `uncertainty_available: false` and no uncertainty file.
+   `sigma_D² = sigma_b² + alpha² sigma_a²` when both `VARIANCE` extensions exist and
+   their propagated variances are finite over the common footprint; otherwise
+   `uncertainty_available: false` and no uncertainty file. `uncertainty_valid_fraction`
+   reports the finite fraction, and `uncertainty_note` states the propagation model.
 10. **Products.** Difference, uncertainty and mask FITS are written under `storage/fits/`
     with `sha256("<cache key>|<kind>")` names (served by `/files/{filename}`), plus a PNG
     preview under `storage/previews/`. Difference FITS carries `BUNIT`, `COMPID`,
     `OBSID1/2`, `DID1/2`, `BAND1/2`, `ALPHA`, `BGA/BGB`, `DIFFMETH`, `REPROJ`,
     `PSFMATCH`, `SWVERS`, `CREATED`. Inputs are never modified.
-11. **Quality.** `PASS` = every check passed; `WARNING` = a product exists but a caveat
-    applies (e.g. missing variance, unverified alignment, relative photometry); `FAIL` =
-    a mandatory prerequisite failed and no difference image exists.
+11. **Quality.** `overall_status` is `FAIL` if any check failed, else `NOT_VERIFIED` if any
+    check could not be verified, else `WARNING` if any check warned, else `PASS`. The
+    detailed lists (`critical_checks`, `failed_checks`, `unverified_checks`, `warnings`)
+    are always present, so a single boolean never hides incomplete validation.
+    `scientifically_valid` is derived from the critical checks (see above).
 12. **Provenance.** Input ids, `obs_publisher_did`, input SHA-256 checksums, timestamps,
     software versions, algorithm, grid, background/photometric/PSF settings, masking
     rules, uncertainty model, per-check statuses and the deterministic cache key.
@@ -1044,16 +1150,52 @@ CORS troubleshooting): [`docs/FRONTEND_INTEGRATION.md`](docs/FRONTEND_INTEGRATIO
 
 ## 8. Testing
 
-Deterministic suite (mocked HTTP, synthetic FITS fixtures):
+Deterministic suite (mocked HTTP, synthetic FITS fixtures, fixed seeds):
 
 ```bash
-python3 -m pytest -q
+uv run pytest -q
 ```
+
+Expected: **223 passed, 6 skipped** (the 6 skips are the opt-in live IRSA tests).
+`compileall` and `pyflakes` are part of the fresh-install check.
+
+Phase 2 review additions:
+
+| File | What it pins |
+|---|---|
+| `tests/test_variance_propagation.py` | 14 analytic tests: constant/nonuniform variance, integer and fractional sampling, bilinear weights, masked neighbours, NaN and negative variance, boundary clamping, no valid support, science/variance alignment, and an explicit proof that variance is *not* interpolated like a scalar image |
+| `tests/test_scientific_validity.py` | `scientifically_valid` is derived; every critical check must be PASS; missing units/variance/mask/PSF, disabled background correction, relative photometry and unverifiable alignment are `NOT_VERIFIED` and block validity; `NOT_VERIFIED` is never serialized as `PASS` |
+| `tests/test_psf_compatibility.py` | compatible PSF verified but not matched, missing/one-sided EPSF metadata `NOT_VERIFIED`, mismatch `FAIL`, warning band, matching unsupported without metadata, matching performed only on request, provenance |
+
+### Fresh-install integration check
+
+```bash
+cd backend
+./scripts/fresh_install_check.sh
+```
+
+The script creates a throwaway virtual environment (`UV_PROJECT_ENVIRONMENT` under
+`mktemp -d`), installs **only** from `uv.lock` with `uv sync --frozen`, then:
+
+1. imports the shipped app and reports the resolved scientific versions;
+2. starts the FastAPI app and checks `/`, `/api/v1/health` and `/openapi.json`;
+3. inspects a deterministic synthetic SPHEREx-shaped FITS (`IMAGE`, `FLAGS`,
+   `VARIANCE`, `EPSF`) through `POST /api/v1/images/inspect`;
+4. runs `POST /api/v1/images/compare` end-to-end and asserts `completed`,
+   `scientifically_valid: true`, every critical check `PASS`, PSF `PASS` with
+   `matched: false`, and a propagated difference uncertainty;
+5. checks `V_out = Σ w_i² V_i` analytically (`1.25` for a `(0.25, 0.5)` pixel shift
+   with constant variance `4.0`, where scalar interpolation would report `4.0`);
+6. runs the full pytest suite, `compileall` and `pyflakes` inside that environment;
+7. confirms the frontend sources and `pnpm-lock.yaml` are byte-identical to
+   `upstream/main`.
+
+All runtime output goes to a temporary `STORAGE_DIR`; the script removes it on exit.
 
 Live IRSA tests (query the real service; skipped unless `RUN_LIVE=1`):
 
 ```bash
-RUN_LIVE=1 python3 -m pytest -q tests/test_live_integration.py tests/test_live_api_workflow.py tests/test_live_timeline.py tests/test_live_image_comparison.py
+RUN_LIVE=1 uv run pytest -q tests/test_live_integration.py tests/test_live_api_workflow.py tests/test_live_timeline.py tests/test_live_image_comparison.py
 ```
 
 `test_live_integration.py` re-runs the validated experiment against the services;
@@ -1104,9 +1246,10 @@ timeline 126 products → 63 observations → 63 epochs, 33.81-day baseline,
 live service: 2 passed in 93 s | live API workflow: 1 passed in 73 s
 ```
 
-Phase 2 deterministic suite (`python3 -m pytest -q`): **188 passed, 6 skipped** —
-63 new tests for inspection, reprojection, alignment, comparison and the new API,
-with the same 6 opt-in live skips.
+Phase 2 deterministic suite (`uv run pytest -q`): **223 passed, 6 skipped** —
+98 Phase 2 tests for inspection, reprojection, variance propagation, alignment,
+scientific validity, PSF compatibility, comparison and the new API, with the same
+6 opt-in live skips.
 
 Phase 2 live validation on 2026-11-14 (after IRSA's proxy recovered):
 
@@ -1212,10 +1355,12 @@ Phase 2 scientific limitations (explicit, not hidden):
 14. **Alignment is measured, not applied.** Phase correlation only validates the WCS-based
     alignment; a residual above 1.5 px rejects the comparison. There is no image-based
     re-registration step (no `photutils`/`scikit-image` available).
-15. **PSF matching is a Gaussian approximation.** The real `EPSF` supplies the FWHM, but
-    the convolution kernel is Gaussian, not the full empirical PSF. Noise propagation
-    assumes white noise (`1/(4πσ²)`). Without `EPSF`/oversampling, compatibility is
-    `UNKNOWN` and reported as a warning.
+15. **PSF matching is a global Gaussian approximation.** The real `EPSF` supplies the
+    FWHM, but the convolution kernel is Gaussian, not the full empirical PSF, and it is
+    one global kernel per product. Spatially varying PSFs are **not supported**
+    (`spatially_varying: false`). Without `EPSF`/oversampling the check is
+    `NOT_VERIFIED`, never `PASS`. Noise is not re-propagated through the matching
+    convolution.
 16. **Background model is global.** A sigma-clipped median per product plus a 4×4 mesh
     variation for reliability. No local background map is subtracted; strong extended
     emission can bias the level.
@@ -1234,3 +1379,17 @@ Phase 2 scientific limitations (explicit, not hidden):
 20. **Only same-band pairs are scientifically meaningful.** The API does not enforce band
     equality (the caller decides), but cross-band subtraction is not valid with this
     model; the response reports both bands so the caller can check.
+21. **Variance propagation assumes independent input pixels.** `V_out = Σ w_i² V_i` is
+    per-pixel only. Interpolation correlates neighbouring output pixels; the output
+    covariance matrix is not computed, so significance maps, matched-filter detection and
+    aperture sums that rely on independent errors must not be derived from the
+    uncertainty FITS. Correlated (resampling-correlated) input noise is also not
+    modelled.
+22. **PSF matching does not propagate noise.** When `psf_matching="gaussian"` is applied,
+    the convolution correlates neighbouring pixels and the propagated uncertainty FITS
+    is computed from the pre-matching variance. Treat the matched-product uncertainty as
+    approximate.
+23. **Scientific validity is conservative.** Any `NOT_VERIFIED` critical check blocks
+    `scientifically_valid`, so products missing `BUNIT`, `FLAGS`, `VARIANCE` or `EPSF`
+    will report `false` even when the difference image itself looks reasonable. This is
+    intentional: the API never upgrades missing evidence to a pass.

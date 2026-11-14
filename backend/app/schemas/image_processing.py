@@ -1,4 +1,25 @@
-"""Image inspection and multi-epoch comparison request/response schemas."""
+"""Image inspection and multi-epoch comparison request/response schemas.
+
+Validation vocabulary
+---------------------
+Every comparison check reports one of:
+
+``PASS``
+    The check ran, the evidence it needs was available, and the criterion held.
+``WARNING``
+    The check ran and produced a non-blocking caveat (for example a PSF width
+    difference below the failure threshold). A warning on a *critical* check
+    still prevents an unconditional ``scientifically_valid`` result.
+``FAIL``
+    The check ran and the criterion was violated. A failing check rejects the
+    comparison and no difference product is written.
+``NOT_VERIFIED``
+    The check could not be performed because data or metadata was missing.
+    This is never treated as ``PASS``.
+
+``ComparisonResponse.scientifically_valid`` is derived, not asserted: it is true
+only when the comparison completed and *every critical check* is ``PASS``.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +29,7 @@ from pydantic import Field
 
 from app.schemas.common import StrictModel, Target
 
-Status = Literal["PASS", "WARNING", "FAIL"]
+Status = Literal["PASS", "WARNING", "FAIL", "NOT_VERIFIED"]
 
 
 # ------------------------------------------------------------------ inspection
@@ -158,6 +179,8 @@ class CompareRequest(StrictModel):
 class CheckResult(StrictModel):
     name: str
     status: Status
+    #: Critical checks must be PASS for the comparison to be scientifically valid.
+    critical: bool = False
     message: str
     details: dict[str, Any] | None = None
 
@@ -165,6 +188,9 @@ class CheckResult(StrictModel):
 class QualityAssessment(StrictModel):
     overall_status: Status
     checks: list[CheckResult]
+    critical_checks: list[str] = Field(default_factory=list)
+    failed_checks: list[str] = Field(default_factory=list)
+    unverified_checks: list[str] = Field(default_factory=list)
     warnings: list[str]
 
 
@@ -232,12 +258,32 @@ class PhotometricInfo(StrictModel):
 
 
 class PsfCompatibility(StrictModel):
+    """PSF comparison and matching status.
+
+    ``matched`` is true only when a convolution was actually applied. It is
+    never set because two FWHM values happen to be similar. Only a global
+    Gaussian approximation is implemented: EPSF kernels are summarised by their
+    median half-maximum width and are not resampled, so spatially varying PSFs
+    are not matched (``spatially_varying`` is always false).
+    """
+
+    metadata_available_a: bool = False
+    metadata_available_b: bool = False
     fwhm_a_arcsec: float | None = None
     fwhm_b_arcsec: float | None = None
     ratio: float | None = None
-    matching: Literal["none", "gaussian"]
-    matched: bool
-    status: Literal["PASS", "WARNING", "FAIL", "UNKNOWN"]
+    #: True only when the FWHM comparison itself could be performed.
+    verified: bool = False
+    matching: Literal["none", "gaussian"] = "none"
+    #: True only when a Gaussian convolution was executed.
+    matched: bool = False
+    #: True when a matching operation exists for this pair (global Gaussian only).
+    matching_supported: bool = False
+    #: EPSF kernels are never resampled, so spatial PSF variation is unsupported.
+    spatially_varying: bool = False
+    method: str | None = None
+    sigma_px: float | None = None
+    status: Literal["PASS", "WARNING", "FAIL", "NOT_VERIFIED"]
     note: str
 
 
@@ -261,6 +307,8 @@ class DifferenceProduct(StrictModel):
     height: int
     unit: str | None = None
     uncertainty_available: bool
+    #: Fraction of common valid pixels with a finite propagated variance.
+    uncertainty_valid_fraction: float | None = None
     uncertainty_note: str
     statistics: DifferenceStatistics
 

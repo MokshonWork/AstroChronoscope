@@ -266,7 +266,7 @@ Single source of truth for backend progress. Updated at the end of each phase.
 - [ ] Phase 3 (photometry/light curves) not started.
 - [x] Phase 2 reprojection is interpolation of calibrated surface brightness on the reference grid — **not flux-conserving** (`flux_conserving: false`); no `reproject`/`photutils`/`scikit-image` dependency was added.
 - [x] Phase 2 alignment is measured (FFT phase correlation), never applied; residual > `MAX_ALIGNMENT_RESIDUAL_PX` rejects the comparison.
-- [x] Phase 2 PSF matching uses the real EPSF FWHM but a Gaussian kernel (documented approximation); missing EPSF/oversampling → `UNKNOWN` + warning.
+- [x] Phase 2 PSF matching uses the real EPSF FWHM but a single global Gaussian kernel (documented approximation). Spatially varying PSFs are unsupported; missing EPSF/oversampling → `NOT_VERIFIED` (never `PASS`), `matching_supported: false`, `matched: false`.
 - [x] Phase 2 background is a global sigma-clipped median (plus mesh variation for reliability), not a local background map.
 - [x] Phase 2 `alpha = 1` default is justified only by matching calibrated surface brightness; `median_ratio` is labelled relative and can absorb real variability.
 - [x] Phase 2 difference products are measurements, not detections: no source extraction, significance map or light curve.
@@ -277,3 +277,49 @@ Single source of truth for backend progress. Updated at the end of each phase.
 - [ ] Browser-level click of "Connect to Backend" not automated: no geckodriver/Selenium/Playwright/Puppeteer in this environment. Connectivity verified via HTTP/CORS only.
 - [ ] No authentication or rate limiting; add at the gateway before public exposure.
 - [ ] In-process SIA caches are per worker; multi-worker deployments re-query IRSA per worker (the disk cutout cache is shared).
+
+## Validation log (PR #1 review: scientific correctness & release readiness)
+
+- **Variance propagation.** `app/services/image_reprojection.py` now computes the
+  interpolation taps and weights itself (`_taps`, `_sample`, `_propagate_variance`) and
+  uses the *same* weights for the science image and the variance map:
+  `V_out = Σ w_i² V_i`. Verified equivalent to
+  `scipy.ndimage.map_coordinates(order=1, mode="nearest")`. Negative/non-finite variance
+  → `NaN` variance with the science value preserved; an output pixel is valid only if
+  every contributing source pixel is valid; boundary taps are clamped and still sum to
+  one. `variance_valid_fraction` is reported. Covariance is **not** modelled and this is
+  stated in the module docstring, the provenance block and the API response.
+- **Scientific validity.** `scientifically_valid` is derived:
+  `all(critical check == PASS)` and `status == "completed"`. All 13 checks are
+  `critical: true`. `NOT_VERIFIED` was added to the `Status` vocabulary and blocks
+  validity without discarding the computed difference. `QualityAssessment` now exposes
+  `critical_checks`, `failed_checks`, `unverified_checks` and `warnings`.
+- **PSF.** `PsfCompatibility` separates `metadata_available_a/b`, `verified`, `matched`,
+  `matching_supported`, `spatially_varying`, `method` and `sigma_px`. `UNKNOWN` was
+  replaced by `NOT_VERIFIED` (a documented breaking change for consumers that tested for
+  `"UNKNOWN"`). No `psf_matched` field exists; `matched` is true only after a real
+  convolution.
+- **Dependencies.** `backend/pyproject.toml` is the single authoritative config
+  (`requires-python = ">=3.14"`, exact pins matching the tested environment,
+  `[tool.uv] package = false`); `backend/uv.lock` is the lockfile (48 packages);
+  `backend/requirements.txt` is a generated `uv export` with hashes. No dependency was
+  added or upgraded relative to the tested versions.
+- **Tests.** `pytest -q` → **223 passed, 6 skipped** (the 6 skips are the opt-in live
+  IRSA tests). New files: `test_variance_propagation.py` (14 analytic tests),
+  `test_scientific_validity.py` (14), `test_psf_compatibility.py` (9). Two existing
+  assertions in `test_image_comparison.py` were updated because they encoded the
+  superseded `WARNING` semantics; no test was weakened to hide a failure.
+- **Fresh install.** `backend/scripts/fresh_install_check.sh` builds a throwaway venv,
+  runs `uv sync --frozen`, executes `scripts/fresh_install_check.py` (19 checks:
+  imports, app startup, `/`, health, OpenAPI, synthetic inspect, comparison, validity,
+  PSF, analytic variance), then the full suite, `compileall` and `pyflakes` inside that
+  environment, and asserts the frontend sources/lockfile are unchanged.
+  Result: all checks passed; `223 passed, 6 skipped`.
+- **Lint/compile.** `python -m compileall -q app scripts` and `python -m pyflakes app
+  scripts` → clean.
+- **Not run here.** The opt-in live IRSA suite (`RUN_LIVE=1`) was not re-executed in this
+  review pass; it remains network-dependent and is reported separately from the
+  deterministic suite.
+- **Known limitation (unchanged).** PSF matching is a global Gaussian approximation;
+  spatially varying PSFs and empirical-kernel resampling are unsupported. Variance
+  propagation is per-pixel only; output covariance is not computed.

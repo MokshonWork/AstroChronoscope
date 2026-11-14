@@ -143,15 +143,16 @@ def test_incompatible_units_prevent_subtraction(settings, fake_client) -> None:
     assert response.photometric.scale_factor == 1.0
 
 
-def test_missing_bunit_is_a_warning_not_a_pass(settings, fake_client) -> None:
+def test_missing_bunit_is_not_verified_not_a_pass(settings, fake_client) -> None:
     service, token_a, token_b = harness(settings, fake_client, epoch_a(), epoch_b(bunit=None))
 
     response = compare(service, token_a, token_b)
 
     assert response.status == "completed"
-    assert check(response, "units").status == "WARNING"
+    assert check(response, "units").status == "NOT_VERIFIED"
     assert response.photometric.units_compatible is None
     assert response.photometric.absolute_calibration is False
+    assert response.scientifically_valid is False
 
 
 def test_insufficient_overlap_prevents_comparison(settings, fake_client) -> None:
@@ -184,10 +185,12 @@ def test_psf_matching_is_applied_only_when_requested(settings, fake_client) -> N
     unmatched = compare(service, token_a, token_b)
     assert unmatched.psf.status == "WARNING"
     assert unmatched.psf.matched is False
+    assert unmatched.scientifically_valid is False
 
     matched = compare(service, token_a, token_b, psf_matching="gaussian")
     assert matched.status == "completed"
     assert matched.psf.matched is True
+    assert matched.psf.matching_supported is True
     assert matched.psf.status == "PASS"
     assert "Gaussian kernel" in matched.psf.note
 
@@ -200,8 +203,9 @@ def test_missing_uncertainty_is_explicit(settings, fake_client) -> None:
     assert response.status == "completed"
     assert response.difference.uncertainty_available is False
     assert response.difference.uncertainty_url is None
-    assert check(response, "uncertainty").status == "WARNING"
+    assert check(response, "uncertainty").status == "NOT_VERIFIED"
     assert "no propagated uncertainty" in response.difference.uncertainty_note.lower()
+    assert response.scientifically_valid is False
 
 
 def test_uncertainty_is_propagated_when_available(settings, fake_client) -> None:
@@ -215,8 +219,14 @@ def test_uncertainty_is_propagated_when_available(settings, fake_client) -> None
     with fits.open(path) as hdul:
         sigma = hdul[0].data
         assert hdul[0].header["UNCTYPE"] == "1-sigma standard deviation"
-    expected = np.sqrt(4e-8 + 4e-8)
-    assert np.nanmedian(sigma) == pytest.approx(expected, rel=0.2)
+    # Interpolation averages independent pixels, so the propagated variance is
+    # below the naive sum: sqrt(V_a) <= sigma_D < sqrt(V_a + V_b).
+    naive = np.sqrt(4e-8 + 4e-8)
+    single = np.sqrt(4e-8)
+    assert np.nanmedian(sigma) < naive
+    assert np.nanmedian(sigma) >= single
+    assert np.nanmax(sigma) <= naive * (1 + 1e-6)
+    assert response.difference.uncertainty_valid_fraction == pytest.approx(1.0)
 
 
 # ------------------------------------------------------- photometry/background
@@ -248,6 +258,7 @@ def test_median_ratio_scaling_is_relative_and_reported(settings, fake_client) ->
     assert response.photometric.scale_factor == pytest.approx(1.5, rel=0.05)
     assert response.photometric.absolute_calibration is False
     assert "relative scale" in response.photometric.note
+    assert response.scientifically_valid is False  # relative scale absorbs real variability
 
 
 def test_absolute_calibration_requires_calibrated_units(settings, fake_client) -> None:

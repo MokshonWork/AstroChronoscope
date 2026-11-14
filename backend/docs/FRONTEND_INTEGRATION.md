@@ -548,18 +548,59 @@ request and returns `200` with:
 
 ```json
 { "status": "rejected", "scientifically_valid": false, "difference": null,
-  "quality": { "overall_status": "FAIL", "checks": [ ... ], "warnings": [ ... ] } }
+  "quality": { "overall_status": "FAIL", "checks": [ ... ],
+               "failed_checks": ["units"], "unverified_checks": [], "warnings": [ ... ] } }
 ```
 
-A completed comparison returns `status: "completed"`, `scientifically_valid: true` and a
-`difference` object with `fits_url`, `preview_url`, `mask_url`, optional
-`uncertainty_url`, `uncertainty_available`, `statistics` and `unit`. All file URLs are
-API-relative; resolve them with `new URL(url, API_ORIGIN)`.
+A completed comparison returns `status: "completed"` and a `difference` object with
+`fits_url`, `preview_url`, `mask_url`, optional `uncertainty_url`,
+`uncertainty_available`, `uncertainty_valid_fraction`, `uncertainty_note`, `statistics`
+and `unit`. All file URLs are API-relative; resolve them with
+`new URL(url, API_ORIGIN)`.
 
-`quality.overall_status`: `PASS` (all checks passed), `WARNING` (product exists but a
-caveat applies — e.g. missing uncertainty, unverified alignment, relative photometry),
-`FAIL` (mandatory prerequisite failed, no difference image). Render
-`quality.checks[].message` for the user; `details` carries the numbers.
+`scientifically_valid` is **derived, not a success flag**: it is `true` only when
+`status === "completed"` and every entry in `quality.checks` with `critical: true` has
+`status === "PASS"`. Do not infer validity from HTTP 200, from `status`, or from the
+presence of a difference image.
+
+### Check statuses
+
+Each entry of `quality.checks` has `name`, `critical`, `status`, `message` and `details`:
+
+| `status` | Meaning | Effect on `scientifically_valid` |
+|---|---|---|
+| `PASS` | check ran, evidence present, criterion met | none |
+| `WARNING` | check ran, non-fatal caveat (e.g. PSF ratio between thresholds, relative photometry) | blocks it when `critical: true` |
+| `FAIL` | check ran, criterion violated | rejects the comparison, no difference image |
+| `NOT_VERIFIED` | check could not be performed (missing `BUNIT`/`FLAGS`/`VARIANCE`/`EPSF`, disabled background correction, unverifiable alignment) | blocks it when `critical: true` |
+
+`NOT_VERIFIED` is **never** a pass. It is normal for a completed comparison to have
+`scientifically_valid: false` while `difference` is populated: the image exists, but a
+prerequisite could not be verified. Surface `quality.unverified_checks` and
+`quality.failed_checks` in the UI rather than collapsing them into one boolean.
+
+`quality.overall_status` is `FAIL` if any check failed, else `NOT_VERIFIED` if any check
+could not be verified, else `WARNING` if any check warned, else `PASS`.
+
+### PSF fields
+
+`psf` distinguishes four independent facts; do not render `psf.status === "PASS"` as
+"PSFs are matched":
+
+| Field | Meaning |
+|---|---|
+| `metadata_available_a` / `metadata_available_b` | an `EPSF` extension exists for that product |
+| `verified` | both FWHMs were measured and compared |
+| `matched` | a convolution was actually applied (only with `psf_matching: "gaussian"`) |
+| `matching_supported` | this backend can match the pair (needs both FWHMs) |
+| `spatially_varying` | always `false`: spatially varying PSF matching is **not supported** |
+| `method`, `sigma_px` | `"global_gaussian_convolution"` and the kernel σ when matched |
+| `status` | `PASS` (compatible), `WARNING` (ratio between thresholds), `FAIL` (ratio above limit), `NOT_VERIFIED` (no EPSF) |
+
+There is no `psf_matched` field, and `matched: true` is only set after the Gaussian
+convolution runs. `PSF` compatibility by FWHM ratio is not the same as PSF matching.
+
+Render `quality.checks[].message` for the user; `details` carries the numbers.
 
 Typical duration: first call downloads two cutouts (seconds to ~1 min each depending on
 IRSA); repeated identical calls are cached and effectively instant.
@@ -872,7 +913,10 @@ HTTP `200` as "the science passed" — check `status` / `scientifically_valid`.
 | `422 REPROJECTION_FAILED` | one product's WCS could not be transformed onto the other grid | try a different pair; report the ids |
 | `503 PROCESSING_BUSY` | `MAX_CONCURRENT_COMPARISONS` saturated | retry after a few seconds |
 | Compare returns `status: "rejected"` | a mandatory prerequisite failed (units, coverage, alignment, PSF) | show `quality.checks` with `status: "FAIL"`; this is not a network error |
-| Compare `overall_status: "WARNING"` | difference exists but has a caveat (no variance, unverified alignment, relative photometry) | show the warning text next to the image |
+| Compare `overall_status: "WARNING"` | difference exists but a critical check warned (PSF ratio between thresholds, relative photometry) | show the warning text; `scientifically_valid` is `false` |
+| Compare `overall_status: "NOT_VERIFIED"` | difference exists but a critical check could not be performed (missing `BUNIT`, `FLAGS`, `VARIANCE` or `EPSF`) | show `quality.unverified_checks`; `scientifically_valid` is `false` — do not present the difference as validated |
+| `psf.matched: false` although `psf.status: "PASS"` | compatibility was verified but no convolution was requested/applied | expected; `matched` is true only after real matching |
+| `psf.status: "NOT_VERIFIED"` | one or both products have no `EPSF` extension | compatibility cannot be checked; the comparison is not scientifically valid |
 | Cutout has `target_inside_image: false` | search radius placed a product whose footprint excludes the target | render with the warning, or pick another observation |
 
 Full backend setup, architecture and scientific notes: [`../README.md`](../README.md).

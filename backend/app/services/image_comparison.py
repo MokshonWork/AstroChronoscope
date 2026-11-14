@@ -274,6 +274,7 @@ class ImageComparisonService:
         checks.append(
             CheckResult(
                 name="coverage",
+                critical=True,
                 status="PASS" if coverage_ok else "FAIL",
                 message=(
                     f"Common valid coverage {common_fraction:.1%} of the output grid"
@@ -293,6 +294,7 @@ class ImageComparisonService:
         checks.append(
             CheckResult(
                 name="alignment",
+                critical=True,
                 status=alignment.status,
                 message=alignment.message,
                 details={
@@ -309,73 +311,157 @@ class ImageComparisonService:
             _background_info(background_a, config.background_correction),
             _background_info(background_b, config.background_correction),
         ]
-        background_ok = all(item.reliable for item in backgrounds) and config.background_correction != "none"
-        checks.append(
-            CheckResult(
-                name="background",
-                status="PASS" if background_ok else "WARNING",
-                message=(
-                    "Background estimated and subtracted from both products"
-                    if background_ok
-                    else "Background correction is disabled or the estimate is unreliable; "
-                    "additive offsets may dominate the difference"
-                ),
-                details={
-                    "levels": [item.level for item in backgrounds],
-                    "variation": [item.mesh_variation for item in backgrounds],
-                },
+        background_details = {
+            "correction": config.background_correction,
+            "levels": [item.level for item in backgrounds],
+            "variation": [item.mesh_variation for item in backgrounds],
+            "reliable": [item.reliable for item in backgrounds],
+        }
+        if config.background_correction == "none":
+            checks.append(
+                CheckResult(
+                    name="background",
+                    critical=True,
+                    status="NOT_VERIFIED",
+                    message=(
+                        "Background correction is disabled; additive sky offsets are neither removed "
+                        "nor verified, so the difference cannot be attributed to the sky signal alone"
+                    ),
+                    details=background_details,
+                )
             )
-        )
+        elif all(item.reliable for item in backgrounds):
+            checks.append(
+                CheckResult(
+                    name="background",
+                    critical=True,
+                    status="PASS",
+                    message="Background estimated and subtracted from both products",
+                    details=background_details,
+                )
+            )
+        else:
+            checks.append(
+                CheckResult(
+                    name="background",
+                    critical=True,
+                    status="NOT_VERIFIED",
+                    message=(
+                        "Background estimate is unreliable for at least one product; the additive "
+                        "offset cannot be verified"
+                    ),
+                    details=background_details,
+                )
+            )
 
         photometric = self._photometric(loaded_a, loaded_b, projected_a, projected_b, common, config)
         if photometric.units_compatible is False:
             units_status = "FAIL"
             units_message = f"BUNIT mismatch ({photometric.bunit_a!r} vs {photometric.bunit_b!r}); no supported conversion"
         elif photometric.units_compatible is None:
-            units_status = "WARNING"
+            units_status = "NOT_VERIFIED"
             units_message = "One or both products have no BUNIT; photometric compatibility is unknown"
         else:
             units_status = "PASS"
             units_message = f"Compatible units ({photometric.bunit_a})"
-        checks.append(CheckResult(name="units", status=units_status, message=units_message,
+        checks.append(CheckResult(name="units", critical=True, status=units_status, message=units_message,
                                   details={"bunit_a": photometric.bunit_a, "bunit_b": photometric.bunit_b}))
         checks.append(
             CheckResult(
                 name="photometric",
-                status="PASS" if photometric.absolute_calibration else "WARNING",
+                critical=True,
+                status="PASS" if photometric.absolute_calibration else "NOT_VERIFIED",
                 message=photometric.note,
-                details={"scale_factor": photometric.scale_factor, "method": photometric.scaling_method},
+                details={
+                    "scale_factor": photometric.scale_factor,
+                    "method": photometric.scaling_method,
+                    "absolute_calibration": photometric.absolute_calibration,
+                },
+            )
+        )
+
+        mask_a = loaded_a.inspection.mask
+        mask_b = loaded_b.inspection.mask
+        missing_masks = [label for label, item in (("A", mask_a), ("B", mask_b)) if not item.available]
+        checks.append(
+            CheckResult(
+                name="masking",
+                critical=True,
+                status="NOT_VERIFIED" if missing_masks else "PASS",
+                message=(
+                    f"No FLAGS extension for product(s) {', '.join(missing_masks)}; only non-finite "
+                    "pixels are masked, so masked-source contamination is unverified"
+                    if missing_masks
+                    else "FLAGS mask applied to both products (informational bits SOURCE/FULLSAMPLE preserved)"
+                ),
+                details={
+                    "mask_available": [mask_a.available, mask_b.available],
+                    "invalid_fraction": [mask_a.invalid_fraction, mask_b.invalid_fraction],
+                },
+            )
+        )
+
+        variance_a = projected_a.variance
+        variance_b = projected_b.variance
+        uncertainty_available = variance_a is not None and variance_b is not None
+        variance_fractions = [projected_a.variance_valid_fraction, projected_b.variance_valid_fraction]
+        variance_complete = uncertainty_available and all(
+            fraction is not None and fraction >= 0.99 for fraction in variance_fractions
+        )
+        if variance_complete:
+            uncertainty_status = "PASS"
+            uncertainty_message = (
+                "VARIANCE extensions propagated with squared interpolation weights; "
+                "sigma_D^2 = sigma_b^2 + alpha^2 sigma_a^2 (independent per-pixel errors)"
+            )
+        elif uncertainty_available:
+            uncertainty_status = "NOT_VERIFIED"
+            uncertainty_message = (
+                "VARIANCE extensions exist but the propagated variance is incomplete over the common "
+                f"footprint (finite fractions {variance_fractions}); the difference uncertainty is partial"
+            )
+        else:
+            uncertainty_status = "NOT_VERIFIED"
+            uncertainty_message = (
+                "At least one product lacks a VARIANCE extension; the difference has no propagated uncertainty"
+            )
+        checks.append(
+            CheckResult(
+                name="uncertainty",
+                critical=True,
+                status=uncertainty_status,
+                message=uncertainty_message,
+                details={
+                    "uncertainty_available": uncertainty_available,
+                    "variance_valid_fraction": variance_fractions,
+                    "propagation": "V_out = sum_i w_i^2 V_i (per-pixel variance only; covariance not modelled)",
+                    "covariance_modelled": False,
+                },
             )
         )
 
         psf = self._psf(loaded_a, loaded_b, config, grid.pixel_scale_arcsec)
-        psf_status = "WARNING" if psf.status == "UNKNOWN" else psf.status
-        checks.append(CheckResult(name="psf", status=psf_status, message=psf.note,
-                                  details={"ratio": psf.ratio, "matched": psf.matched}))
-
-        uncertainty_available = projected_a.variance is not None and projected_b.variance is not None
         checks.append(
             CheckResult(
-                name="uncertainty",
-                status="PASS" if uncertainty_available else "WARNING",
-                message=(
-                    "VARIANCE extensions available; propagated as sigma_D^2 = sigma_b^2 + alpha^2 sigma_a^2"
-                    if uncertainty_available
-                    else "At least one product lacks a VARIANCE extension; the difference has no propagated uncertainty"
-                ),
-                details={"uncertainty_available": uncertainty_available},
+                name="psf",
+                critical=True,
+                status=psf.status,
+                message=psf.note,
+                details={
+                    "ratio": psf.ratio,
+                    "verified": psf.verified,
+                    "matched": psf.matched,
+                    "matching_supported": psf.matching_supported,
+                    "spatially_varying": psf.spatially_varying,
+                },
             )
         )
 
-        overall = _overall(checks)
-        quality = QualityAssessment(
-            overall_status=overall,
-            checks=checks,
-            warnings=[check.message for check in checks if check.status in ("WARNING", "FAIL")],
-        )
+        quality = _quality(checks)
+        scientifically_valid = _scientifically_valid(checks)
         inputs = [_input_product(item) for item in (loaded_a, loaded_b)]
 
-        if overall == "FAIL":
+        if quality.overall_status == "FAIL":
             return self._rejected(
                 comparison_id, request, ra, dec, size, key, created_at, checks,
                 [loaded_a, loaded_b], reprojection_info, alignment, backgrounds, photometric, psf,
@@ -392,7 +478,7 @@ class ImageComparisonService:
         return ComparisonResponse(
             comparison_id=comparison_id,
             status="completed",
-            scientifically_valid=True,
+            scientifically_valid=scientifically_valid,
             target=Target(ra=ra, dec=dec),
             config=config,
             inputs=inputs,
@@ -434,7 +520,7 @@ class ImageComparisonService:
             orientation_diff = abs((orientation_a - orientation_b + 180.0) % 360.0 - 180.0)
 
         if not shift.verified:
-            status = "WARNING"
+            status = "NOT_VERIFIED"
             message = (
                 "Residual alignment could not be independently verified: the images share too "
                 "little correlated structure for phase correlation"
@@ -526,67 +612,95 @@ class ImageComparisonService:
         config: ComparisonConfig,
         grid_pixel_scale: float | None,
     ) -> PsfCompatibility:
+        """Compare EPSF widths and, only on request, apply a global Gaussian match.
+
+        What is implemented: a single global FWHM per product, derived from the
+        median EPSF kernel, compared through a ratio, and an optional Gaussian
+        convolution that broadens the sharper product to the broader FWHM.
+        What is *not* implemented: resampling of the actual EPSF kernels,
+        spatially varying PSF matching, or matching of non-Gaussian profiles.
+        """
         fwhm_a = loaded_a.inspection.psf.fwhm_arcsec
         fwhm_b = loaded_b.inspection.psf.fwhm_arcsec
+        metadata_a = bool(loaded_a.inspection.psf.available)
+        metadata_b = bool(loaded_b.inspection.psf.available)
         ratio = None
         if fwhm_a and fwhm_b:
             ratio = max(fwhm_a, fwhm_b) / min(fwhm_a, fwhm_b)
+        verified = fwhm_a is not None and fwhm_b is not None
+        base = {
+            "metadata_available_a": metadata_a,
+            "metadata_available_b": metadata_b,
+            "fwhm_a_arcsec": fwhm_a,
+            "fwhm_b_arcsec": fwhm_b,
+            "ratio": _round(ratio, 4),
+            "verified": verified,
+            "spatially_varying": False,
+        }
 
         if config.psf_matching == "gaussian":
-            if fwhm_a is None or fwhm_b is None or not grid_pixel_scale:
+            if not verified or not grid_pixel_scale:
                 return PsfCompatibility(
-                    fwhm_a_arcsec=fwhm_a,
-                    fwhm_b_arcsec=fwhm_b,
-                    ratio=_round(ratio, 4),
+                    **base,
                     matching="gaussian",
                     matched=False,
-                    status="UNKNOWN",
-                    note="PSF matching requested but the EPSF FWHM is unavailable for one or both products",
+                    matching_supported=False,
+                    status="NOT_VERIFIED",
+                    note=(
+                        "PSF matching requested but the EPSF FWHM is unavailable for one or both "
+                        "products; no convolution was applied and PSF compatibility is not verified"
+                    ),
                 )
             narrow, broad = sorted([fwhm_a, fwhm_b])
             sigma_arcsec = math.sqrt(max(broad ** 2 - narrow ** 2, 0.0)) / 2.3548200450309493
             sigma_px = sigma_arcsec / grid_pixel_scale
             if sigma_px < 0.05:
                 return PsfCompatibility(
-                    fwhm_a_arcsec=fwhm_a,
-                    fwhm_b_arcsec=fwhm_b,
-                    ratio=_round(ratio, 4),
+                    **base,
                     matching="gaussian",
                     matched=False,
+                    matching_supported=True,
+                    method="global_gaussian_convolution",
+                    sigma_px=_round(sigma_px, 6),
                     status="PASS",
-                    note="PSF FWHM difference is below 0.05 px; no convolution was applied",
+                    note="PSF FWHM difference is below 0.05 px; compatible without convolution",
                 )
             return PsfCompatibility(
-                fwhm_a_arcsec=fwhm_a,
-                fwhm_b_arcsec=fwhm_b,
-                ratio=_round(ratio, 4),
+                **base,
                 matching="gaussian",
                 matched=True,
+                matching_supported=True,
+                method="global_gaussian_convolution",
+                sigma_px=_round(sigma_px, 6),
                 status="PASS",
                 note=(
                     "Sharper product convolved to the broader EPSF FWHM using a Gaussian kernel "
-                    f"(sigma = {sigma_px:.3f} px; EPSF approximated as Gaussian, noise treated as white)"
+                    f"(sigma = {sigma_px:.3f} px; EPSF approximated as one global Gaussian, "
+                    "spatially varying PSF not modelled)"
                 ),
             )
 
-        if ratio is None:
+        if not verified:
             return PsfCompatibility(
-                fwhm_a_arcsec=fwhm_a,
-                fwhm_b_arcsec=fwhm_b,
-                ratio=None,
+                **base,
                 matching="none",
                 matched=False,
-                status="UNKNOWN",
-                note="PSF FWHM unavailable; PSF compatibility is unverified (no matching applied)",
+                matching_supported=False,
+                status="NOT_VERIFIED",
+                note=(
+                    "No EPSF FWHM for one or both products; PSF compatibility could not be checked "
+                    "and no matching was applied, so direct subtraction is not validated"
+                ),
             )
         if ratio <= self.settings.psf_warn_ratio:
             status = "PASS"
-            note = f"PSF FWHM ratio {ratio:.2f}; no PSF matching required"
+            note = f"PSF FWHM ratio {ratio:.2f}; compatible within the warning threshold, no matching required"
         elif ratio <= self.settings.psf_fail_ratio:
             status = "WARNING"
             note = (
                 f"PSF FWHM ratio {ratio:.2f} exceeds the {self.settings.psf_warn_ratio:.2f} warning "
-                "threshold; residual structure may be instrumental"
+                "threshold; residual structure may be instrumental and the comparison is not valid "
+                "unless matching is requested"
             )
         else:
             status = "FAIL"
@@ -595,11 +709,10 @@ class ImageComparisonService:
                 "direct subtraction is not scientifically valid without PSF matching"
             )
         return PsfCompatibility(
-            fwhm_a_arcsec=fwhm_a,
-            fwhm_b_arcsec=fwhm_b,
-            ratio=_round(ratio, 4),
+            **base,
             matching="none",
             matched=False,
+            matching_supported=False,
             status=status,
             note=note,
         )
@@ -656,9 +769,12 @@ class ImageComparisonService:
         difference[common] = data_b[common] - alpha * data_a[common]
 
         variance_difference = None
+        uncertainty_fraction = None
         if variance_a is not None and variance_b is not None:
             variance_difference = np.full(grid.shape, np.nan, dtype=np.float64)
             variance_difference[common] = variance_b[common] + alpha ** 2 * variance_a[common]
+            finite = np.isfinite(variance_difference[common])
+            uncertainty_fraction = float(finite.mean()) if finite.size else 0.0
 
         values = difference[common]
         statistics = DifferenceStatistics(
@@ -716,7 +832,8 @@ class ImageComparisonService:
 
         prefix = self.settings.api_prefix.rstrip("/")
         uncertainty_note = (
-            "Propagated 1-sigma uncertainty from both VARIANCE extensions (independent errors)"
+            "Propagated 1-sigma uncertainty from both VARIANCE extensions "
+            "(squared interpolation weights, independent per-pixel errors; covariance not modelled)"
             if variance_difference is not None
             else "No propagated uncertainty: at least one product lacks a VARIANCE extension"
         )
@@ -729,6 +846,7 @@ class ImageComparisonService:
             height=int(grid.shape[0]),
             unit=unit,
             uncertainty_available=variance_difference is not None,
+            uncertainty_valid_fraction=uncertainty_fraction,
             uncertainty_note=uncertainty_note,
             statistics=statistics,
         )
@@ -778,8 +896,15 @@ class ImageComparisonService:
             psf={
                 "matching": config.psf_matching,
                 "matched": psf.matched,
+                "matching_supported": psf.matching_supported,
+                "spatially_varying": psf.spatially_varying,
+                "method": psf.method,
+                "sigma_px": psf.sigma_px,
+                "verified": psf.verified,
+                "metadata_available": [psf.metadata_available_a, psf.metadata_available_b],
                 "fwhm_arcsec": [psf.fwhm_a_arcsec, psf.fwhm_b_arcsec],
                 "ratio": psf.ratio,
+                "status": psf.status,
             },
             masking={
                 "science_invalid": "non-finite pixels and non-informational FLAGS bits (SOURCE/FULLSAMPLE excluded)",
@@ -789,6 +914,9 @@ class ImageComparisonService:
             uncertainty={
                 "available": uncertainty_available,
                 "model": "sigma_D^2 = sigma_b^2 + alpha^2 * sigma_a^2",
+                "input_propagation": "V_out = sum_i w_i^2 V_i on the reference grid",
+                "assumptions": "independent input-pixel noise; interpolation-correlated output noise not modelled",
+                "covariance_modelled": False,
             },
             input_sha256={
                 loaded_a.observation_id: loaded_a.inspection.fits_sha256,
@@ -886,11 +1014,7 @@ class ImageComparisonService:
         photometric: PhotometricInfo | None,
         psf: PsfCompatibility | None,
     ) -> ComparisonResponse:
-        quality = QualityAssessment(
-            overall_status="FAIL",
-            checks=checks,
-            warnings=[check.message for check in checks if check.status in ("WARNING", "FAIL")],
-        )
+        quality = _quality(checks)
         result = ComparisonResponse(
             comparison_id=comparison_id,
             status="rejected",
@@ -985,15 +1109,42 @@ def _background_info(estimate: BackgroundInfo, correction: str) -> BackgroundInf
 
 # --------------------------------------------------------------------- helpers
 def _check(name: str, passed: bool, ok: str, failed: str) -> CheckResult:
-    return CheckResult(name=name, status="PASS" if passed else "FAIL", message=ok if passed else failed)
+    return CheckResult(
+        name=name,
+        critical=True,
+        status="PASS" if passed else "FAIL",
+        message=ok if passed else failed,
+    )
+
+
+def _quality(checks: list[CheckResult]) -> QualityAssessment:
+    return QualityAssessment(
+        overall_status=_overall(checks),
+        checks=checks,
+        critical_checks=[check.name for check in checks if check.critical],
+        failed_checks=[check.name for check in checks if check.status == "FAIL"],
+        unverified_checks=[check.name for check in checks if check.status == "NOT_VERIFIED"],
+        warnings=[check.message for check in checks if check.status != "PASS"],
+    )
 
 
 def _overall(checks: list[CheckResult]) -> str:
     if any(check.status == "FAIL" for check in checks):
         return "FAIL"
+    if any(check.status == "NOT_VERIFIED" for check in checks):
+        return "NOT_VERIFIED"
     if any(check.status == "WARNING" for check in checks):
         return "WARNING"
     return "PASS"
+
+
+def _scientifically_valid(checks: list[CheckResult]) -> bool:
+    """A comparison is scientifically valid only when every critical check is PASS.
+
+    ``WARNING``, ``FAIL`` and ``NOT_VERIFIED`` on a critical check all prevent an
+    unconditional valid result; the individual statuses stay in the response.
+    """
+    return all(check.status == "PASS" for check in checks if check.critical)
 
 
 def _input_product(item: _Loaded) -> InputProduct:
