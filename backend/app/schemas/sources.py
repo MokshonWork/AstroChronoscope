@@ -144,6 +144,7 @@ class DetectionResponse(StrictModel):
     source: Literal["cutout", "product"]
     source_url: str | None = None
     target: Target | None = None
+    size_deg: float | None = None
     config: DetectionConfig
     image: ImagePreparationSummary
     background: BackgroundEstimate

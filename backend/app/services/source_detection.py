@@ -108,13 +108,16 @@ class SourceDetectionService:
                 "Too many source detections are running; retry shortly",
                 details={"max_concurrent": self.settings.max_concurrent_detections},
             )
+        size = (
+            request.size if request.size is not None else self.settings.comparison_size_deg
+        ) if request.ra is not None else None
         try:
             resolved = resolve_observation_artifact(
                 self.observations,
                 request.observation_id,
                 request.ra,
                 request.dec,
-                request.size,
+                size,
                 default_size=self.settings.comparison_size_deg,
             )
             prepared = prepare_image(resolved.path, mesh=request.config.background_mesh)
@@ -131,6 +134,7 @@ class SourceDetectionService:
             source=resolved.source,
             source_url=resolved.detail.fits_access_url,
             target=Target(ra=request.ra, dec=request.dec) if request.ra is not None else None,
+            size_deg=size,
             config=request.config,
             image=prepared.summary(),
             background=prepared.background,

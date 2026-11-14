@@ -51,6 +51,7 @@ class CacheStore:
         self.timeline = TTLCache(ttl_seconds, max_entries)
         self.comparisons = TTLCache(ttl_seconds, max_entries)
         self.sources = TTLCache(ttl_seconds, max_entries)
+        self.photometry = TTLCache(ttl_seconds, max_entries)
         self.lightcurves = TTLCache(ttl_seconds, max_entries)
         self.variability = TTLCache(ttl_seconds, max_entries)
 
@@ -60,5 +61,6 @@ class CacheStore:
         self.timeline.clear()
         self.comparisons.clear()
         self.sources.clear()
+        self.photometry.clear()
         self.lightcurves.clear()
         self.variability.clear()
