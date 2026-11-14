@@ -37,4 +37,23 @@ __pycache__/
 env/
 venv/
 .ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Backend runtime artifacts (downloaded cutouts, generated FITS/PNGs, records).
+# Only the directory placeholders are tracked; never the generated data.
+backend/storage/fits/*
+backend/storage/previews/*
+backend/storage/comparisons/*
+!backend/storage/fits/.gitkeep
+!backend/storage/previews/.gitkeep
+!backend/storage/comparisons/.gitkeep
+
+# OS metadata
+.DS_Store
+Thumbs.db
 
