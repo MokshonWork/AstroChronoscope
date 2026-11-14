@@ -1,32 +1,45 @@
-# React + TypeScript + Vite
+# AstroChoronoscope
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+## Prerequisites
 
-Currently, two official plugins are available:
+- Node.js
+- pnpm
+- uv (Install it through `irm https://astral.sh/uv/install.ps1 | iex`)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Setup
 
-## React Compiler
+### 1. Clone the repository
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+git clone https://github.com/greenbugx/AstroChronoscope
+cd AstroChoronoscope
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+### 2. Install dependencies
+
+```bash
+pnpm install
+```
+
+### 3. Run the development server
+
+```bash
+pnpm run dev
+```
+
+### 4. Run the backend
+
+```bash
+cd backend/
+uv run fastapi dev main.py
+```
+
+## Usage
+
+1. Start the FastAPI backend (if not already running).
+2. Open the application in your browser (usually `http://localhost:5173`).
+3. Click "Test Backend Connection" to verify the connection.
+
+## License
+
+Check [LICENSE](LICENSE) for more information.
