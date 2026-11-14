@@ -309,6 +309,8 @@ def _measure_one(
         y=round(cy, 4),
         ra_deg=detection.ra_deg,
         dec_deg=detection.dec_deg,
+        centroid_error_px=detection.centroid_error_px,
+        centroid_error_arcsec=detection.centroid_error_arcsec,
         aperture_radius_px=round(radius, 4),
         aperture_radius_arcsec=(
             radius * prepared.pixel_scale_arcsec if prepared.pixel_scale_arcsec is not None else None

@@ -104,6 +104,10 @@ class DetectedSource(StrictModel):
     centroid_x: float
     centroid_y: float
     detection_snr: float | None = Field(None, description="Background-subtracted pixel sum over noise*sqrt(area)")
+    centroid_error_px: float | None = Field(
+        None, description="Approximate 1-sigma centroid error, FWHM/(2.355*SNR); not an astrometric calibration error"
+    )
+    centroid_error_arcsec: float | None = None
     fwhm_px: float | None = None
     fwhm_arcsec: float | None = None
     ellipticity: float | None = None

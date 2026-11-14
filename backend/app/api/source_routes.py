@@ -1,14 +1,24 @@
-"""Phase 3 source detection and aperture-photometry routes."""
+"""Phase 3 source detection, photometry and source-catalogue routes."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_photometry_service, get_source_detection_service
+from app.api.deps import (
+    get_photometry_service,
+    get_source_catalog_service,
+    get_source_detection_service,
+)
 from app.schemas.common import ErrorResponse
+from app.schemas.lightcurve import (
+    SourceDetailResponse,
+    SourceLightCurveResponse,
+    SourceVariabilityResponse,
+)
 from app.schemas.photometry import PhotometryRequest, PhotometryResponse
 from app.schemas.sources import DetectionRequest, DetectionResponse
 from app.services.photometry import PhotometryService
+from app.services.source_catalog import SourceCatalogService
 from app.services.source_detection import SourceDetectionService
 
 router = APIRouter(prefix="/sources", tags=["sources"])
@@ -47,3 +57,42 @@ def measure_sources(
     service: PhotometryService = Depends(get_photometry_service),
 ) -> PhotometryResponse:
     return service.measure(payload)
+
+
+@router.get(
+    "/{source_id}",
+    response_model=SourceDetailResponse,
+    responses=_ERRORS,
+    summary="Retrieve a persisted internal source and its detections",
+)
+def get_source(
+    source_id: str,
+    service: SourceCatalogService = Depends(get_source_catalog_service),
+) -> SourceDetailResponse:
+    return service.source(source_id)
+
+
+@router.get(
+    "/{source_id}/lightcurve",
+    response_model=SourceLightCurveResponse,
+    responses=_ERRORS,
+    summary="Retrieve the per-band light curve for one persisted source",
+)
+def get_source_lightcurve(
+    source_id: str,
+    service: SourceCatalogService = Depends(get_source_catalog_service),
+) -> SourceLightCurveResponse:
+    return service.lightcurve(source_id)
+
+
+@router.get(
+    "/{source_id}/variability",
+    response_model=SourceVariabilityResponse,
+    responses=_ERRORS,
+    summary="Retrieve variability evidence for one persisted source",
+)
+def get_source_variability(
+    source_id: str,
+    service: SourceCatalogService = Depends(get_source_catalog_service),
+) -> SourceVariabilityResponse:
+    return service.variability(source_id)

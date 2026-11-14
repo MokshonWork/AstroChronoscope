@@ -67,6 +67,8 @@ def test_integrated_flux_matches_the_rendered_gaussian(tmp_path):
     assert measurement.flux_jy == pytest.approx(EXPECTED_JY, rel=0.02)
     assert measurement.flux_jy_error is not None and measurement.flux_jy_error > 0
     assert measurement.snr is not None and measurement.snr > 10
+    assert measurement.centroid_error_arcsec is not None
+    assert measurement.centroid_error_arcsec < 0.2
     assert measurement.uncertainty_method in {"variance_array", "mixed"}
     assert measurement.quality == "PASS"
     assert measurement.flags == []

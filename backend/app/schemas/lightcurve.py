@@ -27,6 +27,15 @@ VARIABILITY_ALGORITHM_VERSION = "phase3-variability-metrics-v1"
 class AssociationConfig(StrictModel):
     match_radius_arcsec: float = Field(6.0, gt=0.0, le=120.0)
     ambiguity_margin_arcsec: float = Field(1.0, ge=0.0, le=60.0)
+    position_uncertainty_sigma: float = Field(
+        3.0,
+        ge=0.0,
+        le=10.0,
+        description="Multiplier on the combined centroid error when expanding the match radius",
+    )
+    max_uncertainty_boost_arcsec: float = Field(
+        3.0, ge=0.0, le=30.0, description="Upper bound on the uncertainty-driven match-radius expansion"
+    )
     min_epochs: int = Field(2, ge=1, le=100)
     max_sources: int = Field(100, ge=1, le=5000)
 
@@ -43,11 +52,20 @@ class EpochMeasurements(StrictModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class AssociationCandidate(StrictModel):
+    source_id: str
+    separation_arcsec: float
+    selected: bool = False
+
+
 class MatchedDetection(StrictModel):
     measurement: FluxMeasurement
     epoch_key: str
     separation_arcsec: float | None = None
     reference_separation_arcsec: float | None = None
+    position_sigma_arcsec: float | None = None
+    effective_match_radius_arcsec: float | None = None
+    candidates: list[AssociationCandidate] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
 
 
@@ -80,6 +98,10 @@ class AssociationSummary(StrictModel):
     input_epochs: int
     input_detections: int
     source_count: int
+    multi_epoch_sources: int = 0
+    below_min_epoch_sources: int = 0
+    below_min_epoch_source_ids: list[str] = Field(default_factory=list)
+    sources_truncated: bool = False
     ambiguous_matches: int
     duplicates_dropped: int
     missing_position_dropped: int
@@ -200,11 +222,77 @@ class TargetLightCurveResponse(StrictModel):
     provenance: LightCurveProvenance
 
 
+class SourceRecord(StrictModel):
+    source: AssociatedSource
+    lightcurve: SourceLightCurve
+    target: Target
+    query: LightCurveQuery
+    provenance: LightCurveProvenance
+
+
+class SourceDetailResponse(StrictModel):
+    success: Literal[True] = True
+    source: AssociatedSource
+    target: Target
+    query: LightCurveQuery
+    provenance: LightCurveProvenance
+
+
+class SourceLightCurveResponse(StrictModel):
+    success: Literal[True] = True
+    source: SourceLightCurve
+    target: Target
+    query: LightCurveQuery
+    provenance: LightCurveProvenance
+
+
+class BandVariability(StrictModel):
+    band: str | None = None
+    expected_epochs: int
+    non_detections: int
+    metrics: VariabilityMetrics
+
+
+class SourceVariability(StrictModel):
+    source_id: str
+    reference_ra_deg: float
+    reference_dec_deg: float
+    epoch_count: int
+    bands: list[str] = Field(default_factory=list)
+    position_scatter_arcsec: float | None = None
+    band_metrics: list[BandVariability] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+
+
+class SourceVariabilityResponse(StrictModel):
+    success: Literal[True] = True
+    source: SourceVariability
+    target: Target
+    query: LightCurveQuery
+    provenance: LightCurveProvenance
+
+
+class TargetVariabilityResponse(StrictModel):
+    success: Literal[True] = True
+    target: Target
+    query: LightCurveQuery
+    epochs_considered: int
+    epochs_processed: int
+    products_processed: int
+    sources: list[SourceVariability] = Field(default_factory=list)
+    failures: list[EpochFailure] = Field(default_factory=list)
+    association: AssociationSummary
+    warnings: list[str] = Field(default_factory=list)
+    provenance: LightCurveProvenance
+
+
 __all__ = [
     "ASSOCIATION_ALGORITHM_VERSION",
+    "AssociationCandidate",
     "AssociationConfig",
     "AssociationSummary",
     "AssociatedSource",
+    "BandVariability",
     "EpochFailure",
     "EpochMeasurements",
     "ExcludedDetection",
@@ -213,9 +301,15 @@ __all__ = [
     "LightCurveQuery",
     "LightCurveSeries",
     "MatchedDetection",
+    "SourceDetailResponse",
     "SourceLightCurve",
+    "SourceLightCurveResponse",
+    "SourceRecord",
+    "SourceVariability",
+    "SourceVariabilityResponse",
     "TargetLightCurveRequest",
     "TargetLightCurveResponse",
+    "TargetVariabilityResponse",
     "VARIABILITY_ALGORITHM_VERSION",
     "VariabilityMetrics",
 ]

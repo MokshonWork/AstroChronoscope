@@ -147,6 +147,11 @@ class SourceNotFoundError(PlanetXError):
     status_code = 404
 
 
+class SourceStorageError(PlanetXError):
+    code = "SOURCE_STORAGE_ERROR"
+    status_code = 500
+
+
 class PhotometryError(PlanetXError):
     code = "PHOTOMETRY_FAILED"
     status_code = 422

@@ -181,4 +181,134 @@ def test_openapi_exposes_phase3_routes(api) -> None:
     paths = response.json()["paths"]
     assert "/api/v1/sources/detect" in paths
     assert "/api/v1/sources/photometry" in paths
+    assert "/api/v1/sources/{source_id}" in paths
+    assert "/api/v1/sources/{source_id}/lightcurve" in paths
+    assert "/api/v1/sources/{source_id}/variability" in paths
     assert "/api/v1/targets/lightcurve" in paths
+    assert "/api/v1/targets/variability" in paths
+
+
+def _build_lightcurve(client) -> dict:
+    response = client.post(
+        "/api/v1/targets/lightcurve",
+        json={
+            "ra": TARGET_RA,
+            "dec": TARGET_DEC,
+            "radius_deg": 0.05,
+            "cutout_size_deg": 0.05,
+            "max_observations": 5,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = strict_json(response.text)
+    assert len(body["sources"]) == 1
+    return body
+
+
+def test_source_catalogue_survives_cache_clear(api) -> None:
+    client, _fake_client, _settings, cache = api
+    _seed(api)
+    lightcurve = _build_lightcurve(client)
+    source_id = lightcurve["sources"][0]["source_id"]
+
+    cache.clear()
+
+    detail = client.get(f"/api/v1/sources/{source_id}")
+    assert detail.status_code == 200, detail.text
+    detail_body = strict_json(detail.text)
+    assert detail_body["success"] is True
+    assert detail_body["source"]["source_id"] == source_id
+    assert len(detail_body["source"]["detections"]) == 2
+    assert detail_body["target"]["ra"] == TARGET_RA
+    assert detail_body["query"]["radius_deg"] == 0.05
+    assert detail_body["provenance"]["created_at"]
+
+    curve = client.get(f"/api/v1/sources/{source_id}/lightcurve")
+    assert curve.status_code == 200, curve.text
+    curve_body = strict_json(curve.text)
+    assert curve_body["source"]["source_id"] == source_id
+    assert len(curve_body["source"]["series"]) == 1
+    assert len(curve_body["source"]["series"][0]["points"]) == 2
+
+    variability = client.get(f"/api/v1/sources/{source_id}/variability")
+    assert variability.status_code == 200, variability.text
+    variability_body = strict_json(variability.text)
+    assert variability_body["source"]["source_id"] == source_id
+    assert variability_body["source"]["band_metrics"][0]["band"] == "SPHEREx-D3"
+    assert variability_body["source"]["band_metrics"][0]["metrics"]["n_points"] == 2
+
+
+def test_target_variability_returns_band_metrics_without_fabricated_flux(api) -> None:
+    client, _fake_client, _settings, _cache = api
+    _seed(api)
+
+    response = client.post(
+        "/api/v1/targets/variability",
+        json={
+            "ra": TARGET_RA,
+            "dec": TARGET_DEC,
+            "radius_deg": 0.05,
+            "cutout_size_deg": 0.05,
+            "max_observations": 5,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = strict_json(response.text)
+    assert body["success"] is True
+    assert body["epochs_processed"] == 2
+    assert len(body["sources"]) == 1
+    assert body["sources"][0]["band_metrics"][0]["metrics"]["unit"] == "Jy"
+    assert body["sources"][0]["band_metrics"][0]["non_detections"] == 0
+    assert "series" not in body["sources"][0]
+    assert "detections" not in body["sources"][0]
+
+
+def test_unknown_source_is_a_typed_404(api) -> None:
+    client, _fake_client, _settings, _cache = api
+
+    for path in (
+        "/api/v1/sources/not-a-source",
+        "/api/v1/sources/not-a-source/lightcurve",
+        "/api/v1/sources/not-a-source/variability",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404
+        body = strict_json(response.text)
+        assert body["success"] is False
+        assert body["error"]["code"] == "SOURCE_NOT_FOUND"
+
+
+def test_single_epoch_source_is_preserved_and_retrievable(api) -> None:
+    client, fake_client, _settings, _cache = api
+    _seed(api)
+    fake_client.rows = fake_client.rows[:1]
+
+    response = client.post(
+        "/api/v1/targets/lightcurve",
+        json={
+            "ra": TARGET_RA,
+            "dec": TARGET_DEC,
+            "radius_deg": 0.05,
+            "cutout_size_deg": 0.05,
+            "max_observations": 5,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = strict_json(response.text)
+    assert body["sources"] == []
+    assert body["association"]["below_min_epoch_sources"] == 1
+    assert len(body["association"]["below_min_epoch_source_ids"]) == 1
+    assert "sources_below_minimum_epochs_not_in_lightcurves" in body["warnings"]
+
+    source_id = body["association"]["below_min_epoch_source_ids"][0]
+    detail = client.get(f"/api/v1/sources/{source_id}")
+    assert detail.status_code == 200, detail.text
+    assert len(strict_json(detail.text)["source"]["detections"]) == 1
+
+    curve = client.get(f"/api/v1/sources/{source_id}/lightcurve")
+    assert curve.status_code == 200, curve.text
+    curve_body = strict_json(curve.text)
+    assert curve_body["source"]["series"] == []
+    assert "below_min_epochs" in curve_body["source"]["flags"]

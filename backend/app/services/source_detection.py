@@ -397,6 +397,12 @@ def _measure_group(
     shape = _shape(mxx, myy, mxy)
 
     snr = flux / (noise * math.sqrt(area)) if noise > 0 else None
+    fwhm_px = shape["fwhm_px"]
+    centroid_error_px = (
+        fwhm_px / (_FWHM_PER_SIGMA * snr)
+        if fwhm_px is not None and snr is not None and snr > 0
+        else None
+    )
     peak_value = float(np.max(prepared.data[ys, xs]))
     ny, nx = prepared.shape
     margin = config.edge_margin_px
@@ -435,10 +441,16 @@ def _measure_group(
         centroid_x=round(cx, 4),
         centroid_y=round(cy, 4),
         detection_snr=_finite(snr),
-        fwhm_px=shape["fwhm_px"],
+        centroid_error_px=_finite(centroid_error_px),
+        centroid_error_arcsec=(
+            centroid_error_px * prepared.pixel_scale_arcsec
+            if centroid_error_px is not None and prepared.pixel_scale_arcsec is not None
+            else None
+        ),
+        fwhm_px=fwhm_px,
         fwhm_arcsec=(
-            shape["fwhm_px"] * prepared.pixel_scale_arcsec
-            if shape["fwhm_px"] is not None and prepared.pixel_scale_arcsec is not None
+            fwhm_px * prepared.pixel_scale_arcsec
+            if fwhm_px is not None and prepared.pixel_scale_arcsec is not None
             else None
         ),
         ellipticity=shape["ellipticity"],

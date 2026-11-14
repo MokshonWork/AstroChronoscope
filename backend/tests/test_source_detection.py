@@ -45,6 +45,11 @@ def test_detects_the_three_rendered_sources(tmp_path):
         assert len(detection.detection_id) == 32
         assert detection.source_area >= 5
         assert detection.detection_snr is not None
+        assert detection.centroid_error_px is not None and detection.centroid_error_px > 0
+        assert detection.centroid_error_arcsec is not None
+        assert detection.centroid_error_arcsec == pytest.approx(
+            detection.centroid_error_px * 6.15, rel=1e-4
+        )
         assert detection.fwhm_px is not None and detection.fwhm_px > 0
         assert detection.ellipticity is not None
         assert detection.background_level is not None

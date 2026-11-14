@@ -42,6 +42,7 @@ from app.schemas.timeline import TimelineEpoch, TimelineProduct
 from app.services.observation_service import ObservationService
 from app.services.photometry import PhotometryService
 from app.services.source_association import associate_epochs
+from app.services.source_catalog import SourceCatalogService
 from app.services.source_detection import SourceDetectionService
 from app.services.timeline_service import TimelineService
 from app.services.variability import compute_variability
@@ -143,6 +144,7 @@ class TargetLightCurveService:
         observations: ObservationService,
         detection: SourceDetectionService | None = None,
         photometry: PhotometryService | None = None,
+        catalog: SourceCatalogService | None = None,
     ) -> None:
         self.observations = observations
         self.settings: Settings = observations.settings
@@ -150,6 +152,7 @@ class TargetLightCurveService:
         self.timeline = TimelineService(observations)
         self.detection = detection or SourceDetectionService(observations)
         self.photometry = photometry or PhotometryService(observations, self.detection)
+        self.catalog = catalog or SourceCatalogService(self.settings, self.cache)
 
     def build(self, request: TargetLightCurveRequest) -> TargetLightCurveResponse:
         cutout_size = validate_cutout_size(
@@ -225,6 +228,10 @@ class TargetLightCurveService:
             warnings.add("detections_without_position_dropped")
         if failures:
             warnings.add("some_observations_failed")
+        if summary.below_min_epoch_sources:
+            warnings.add("sources_below_minimum_epochs_not_in_lightcurves")
+        if summary.sources_truncated:
+            warnings.add("association_source_limit_reached")
         if not sources:
             warnings.add("no_multi_epoch_sources")
 
@@ -250,6 +257,7 @@ class TargetLightCurveService:
                 software=software_versions(),
             ),
         )
+        self.catalog.store(response, associated, request.association)
         self.cache.lightcurves.set(key, response)
         log.info(
             "lightcurves_built",
@@ -265,9 +273,18 @@ class TargetLightCurveService:
 def _select_products(
     epochs: list[TimelineEpoch], bands: list[str] | None, limit: int
 ) -> list[tuple[TimelineEpoch, TimelineProduct]]:
+    """Choose one ready product per band for at most ``limit`` epochs.
+
+    ``max_observations`` is an epoch limit, not a product-row limit: all requested
+    bands for a selected epoch are kept together so a light curve is not truncated
+    mid-epoch.
+    """
     wanted = {band.casefold() for band in bands} if bands else None
     selected: list[tuple[TimelineEpoch, TimelineProduct]] = []
+    selected_epochs = 0
     for epoch in epochs:
+        if selected_epochs >= limit:
+            break
         if not epoch.timeline_eligible or epoch.target_covered is False:
             continue
         if wanted is None:
@@ -276,6 +293,7 @@ def _select_products(
             target_bands = [band for band in epoch.bands if band.casefold() in wanted]
             if not target_bands:
                 continue
+        epoch_products: list[tuple[TimelineEpoch, TimelineProduct]] = []
         for band in target_bands:
             candidates = [
                 product
@@ -288,9 +306,10 @@ def _select_products(
             if not candidates:
                 continue
             candidates.sort(key=_product_priority)
-            selected.append((epoch, candidates[0]))
-            if len(selected) >= limit:
-                return selected
+            epoch_products.append((epoch, candidates[0]))
+        if epoch_products:
+            selected.extend(epoch_products)
+            selected_epochs += 1
     return selected
 
 

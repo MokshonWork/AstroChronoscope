@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from app.schemas.lightcurve import AssociationConfig, EpochMeasurements
 from app.schemas.photometry import FluxMeasurement
 from app.services.source_association import associate_epochs
@@ -18,6 +20,7 @@ def _measurement(
     dec: float | None = TARGET_DEC,
     band: str | None = "A",
     snr: float | None = 10.0,
+    centroid_error_arcsec: float | None = 0.2,
 ) -> FluxMeasurement:
     return FluxMeasurement(
         detection_id=detection_id,
@@ -28,6 +31,7 @@ def _measurement(
         dec_deg=dec,
         x=10.0,
         y=10.0,
+        centroid_error_arcsec=centroid_error_arcsec,
         aperture_radius_px=6.0,
         aperture_area_px=100.0,
         aperture_valid_fraction=1.0,
@@ -94,6 +98,7 @@ def test_small_offset_is_matched_and_recorded():
     matched = source.detections[1]
     assert matched.separation_arcsec is not None
     assert abs(matched.separation_arcsec - 3.0) < 0.05
+    assert [candidate.selected for candidate in matched.candidates] == [True]
 
 
 def test_large_offset_creates_two_single_epoch_sources():
@@ -107,7 +112,65 @@ def test_large_offset_creates_two_single_epoch_sources():
     )
 
     assert summary.source_count == 2
+    assert summary.multi_epoch_sources == 0
+    assert summary.below_min_epoch_sources == 2
+    assert sorted(summary.below_min_epoch_source_ids) == sorted(
+        source.source_id for source in sources
+    )
     assert all("single_epoch" in source.flags for source in sources)
+
+
+def test_positional_uncertainty_can_expand_the_match_radius_within_a_cap():
+    ra, dec = _offset(TARGET_RA, TARGET_DEC, 7.0, 0.0)
+    sources, summary = associate_epochs(
+        [
+            _epoch(
+                "e1",
+                "obs-a",
+                60000.0,
+                [_measurement("det-a", "obs-a", centroid_error_arcsec=1.0)],
+            ),
+            _epoch(
+                "e2",
+                "obs-b",
+                60010.0,
+                [
+                    _measurement(
+                        "det-b",
+                        "obs-b",
+                        ra=ra,
+                        dec=dec,
+                        centroid_error_arcsec=1.0,
+                    )
+                ],
+            ),
+        ],
+        AssociationConfig(match_radius_arcsec=6.0, max_uncertainty_boost_arcsec=3.0),
+    )
+
+    assert summary.source_count == 1
+    source = sources[0]
+    assert source.detection_count == 2
+    matched = source.detections[1]
+    assert matched.position_sigma_arcsec == pytest.approx(math.sqrt(2.0))
+    assert matched.effective_match_radius_arcsec == pytest.approx(6.0 + 3.0)
+    assert "position_uncertainty_incomplete" not in source.flags
+
+
+def test_missing_centroid_uncertainty_is_flagged_not_invented():
+    sources, _summary = associate_epochs(
+        [
+            _epoch(
+                "e1",
+                "obs-a",
+                60000.0,
+                [_measurement("det-a", "obs-a", centroid_error_arcsec=None)],
+            )
+        ],
+        AssociationConfig(),
+    )
+
+    assert "position_uncertainty_incomplete" in sources[0].flags
 
 
 def test_duplicate_detection_in_one_epoch_is_excluded_with_reason():

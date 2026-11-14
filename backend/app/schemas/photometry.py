@@ -63,6 +63,10 @@ class FluxMeasurement(StrictModel):
     y: float
     ra_deg: float | None = None
     dec_deg: float | None = None
+    centroid_error_px: float | None = Field(
+        None, description="Approximate 1-sigma centroid error inherited from detection, FWHM/(2.355*SNR)"
+    )
+    centroid_error_arcsec: float | None = None
 
     aperture_radius_px: float
     aperture_radius_arcsec: float | None = None

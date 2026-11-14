@@ -13,8 +13,10 @@ No mock observations, no synthetic FITS, no hardcoded observation metadata.
 > `POST /api/v1/images/compare`, `GET /api/v1/images/comparisons/{id}`) and
 > **Phase 3 source detection + aperture photometry + light curves**
 > (`POST /api/v1/sources/detect`, `POST /api/v1/sources/photometry`,
-> `POST /api/v1/targets/lightcurve`) are implemented. Spectral extraction, PSF photometry,
-> forced photometry and candidate classification remain **out of scope** (Phase 4+).
+> `POST /api/v1/targets/lightcurve`, `POST /api/v1/targets/variability`,
+> `GET /api/v1/sources/{id}`, `/lightcurve`, `/variability`) are implemented.
+> Spectral extraction, PSF photometry, forced photometry and candidate classification
+> remain **out of scope** (Phase 4+).
 
 ---
 
@@ -82,7 +84,8 @@ app/
     image_preparation.py   Validity mask, background/noise, PSF and pixel solid angle
     source_detection.py    Masked matched filter, segmentation, deblending, centroids
     photometry.py          Circular aperture photometry and MJy/sr → Jy conversion
-    source_association.py  Angular cross-epoch association and internal source ids
+    source_association.py  Angular association, candidate ranking and source ids
+    source_catalog.py      Persisted source detail, light-curve and variability views
     variability.py         Light-curve statistics (F_var, χ², MAD, baseline, gaps)
     lightcurve_service.py  Timeline → detection → photometry → association → series
   api/
@@ -90,8 +93,8 @@ app/
     observation_routes.py  /observations/*
     timeline_routes.py     /targets/timeline
     image_routes.py        /images/inspect, /images/compare, /images/comparisons/*
-    source_routes.py       /sources/detect, /sources/photometry
-    lightcurve_routes.py   /targets/lightcurve
+    source_routes.py       /sources/detect, /sources/photometry, /sources/{id}(/*)
+    lightcurve_routes.py   /targets/lightcurve, /targets/variability
     file_routes.py         /files/* (hash-name allowlist, no traversal)
 tests/
   test_*.py                Deterministic unit/API tests (no network)
@@ -151,10 +154,17 @@ POST /api/v1/sources/photometry
   → quality/coverage flags → JSON measurements
 
 POST /api/v1/targets/lightcurve
-  → cached SIA search + timeline → choose one product per epoch/band
-  → detect + photometer every epoch (bounded) → angular cross-epoch association
+  → cached SIA search + timeline → choose one product per epoch (all requested bands)
+  → detect + photometer every epoch (bounded) → uncertainty-aware angular association
   → per-band series → count non-detections → variability metrics (not classification)
   → per-epoch failures and provenance → JSON light curves
+  -> persist source/light-curve records
+
+POST /api/v1/targets/variability
+  -> same bounded pipeline/caches -> per-band metrics without point arrays
+
+GET /api/v1/sources/{id}, /sources/{id}/lightcurve, /sources/{id}/variability
+  -> TTL cache or storage/sources/<id>.json -> persisted source, detections, series, metrics
 ```
 
 Each SIA row is a **product**, not an independent observation. SPHEREx returns one row
@@ -1062,6 +1072,8 @@ Response (abridged; values are illustrative):
       "centroid_x": 28.7,
       "centroid_y": 28.8,
       "detection_snr": 42.1,
+      "centroid_error_px": 0.05,
+      "centroid_error_arcsec": 0.31,
       "fwhm_px": 2.05,
       "fwhm_arcsec": 12.6,
       "background_level": 0.31,
@@ -1123,6 +1135,8 @@ Response (abridged; values are illustrative):
       "observation_id": "<observation_id>",
       "band": "SPHEREx-D3",
       "observation_time": "2026-05-17T06:32:37.132800+00:00",
+      "centroid_error_px": 0.05,
+      "centroid_error_arcsec": 0.31,
       "aperture_radius_px": 6.15,
       "aperture_valid_fraction": 1.0,
       "psf_fwhm_px": 2.05,
@@ -1161,9 +1175,9 @@ Response (abridged; values are illustrative):
 
 ### 4.13 `POST /targets/lightcurve`
 
-End-to-end Phase 3 pipeline: SIA discovery → timeline → one product per epoch/band →
-detection → aperture photometry → angular association → per-band light curves and
-variability metrics.
+End-to-end Phase 3 pipeline: SIA discovery -> timeline -> one product per epoch (all
+requested bands) -> detection -> aperture photometry -> uncertainty-aware angular
+association -> per-band light curves and variability metrics.
 
 Request:
 
@@ -1181,6 +1195,8 @@ Request:
   "association": {
     "match_radius_arcsec": 6.0,
     "ambiguity_margin_arcsec": 1.0,
+    "position_uncertainty_sigma": 3.0,
+    "max_uncertainty_boost_arcsec": 3.0,
     "min_epochs": 2,
     "max_sources": 100
   }
@@ -1189,13 +1205,18 @@ Request:
 
 - `radius_deg` is the **archive search** radius; `cutout_size_deg` is the **image**
   cutout around the target. They are deliberately separate.
-- `max_observations` bounds work per request (`1–200`). The endpoint is synchronous:
-  the first call can download many cutouts, so use a small `max_observations` and a
-  loading state. Repeated identical requests reuse the detection/photometry caches.
+- `max_observations` bounds **epochs** per request (`1-200`), keeping all requested
+  bands for each selected epoch. The endpoint is synchronous: the first call can
+  download many cutouts, so use a small `max_observations` and a loading state. Repeated
+  identical requests reuse the detection/photometry caches.
 - `bands` is an optional exact filter. Different bands are never merged into one
   series.
-- `match_radius_arcsec` is the angular association radius (great-circle separation).
-  Ambiguous nearest-neighbour matches are flagged, not silently forced.
+- `match_radius_arcsec` is the base angular radius (great-circle separation).
+  `position_uncertainty_sigma` expands it by each detection's approximate centroid
+  uncertainty, capped by `max_uncertainty_boost_arcsec`; candidate alternatives are
+  ranked and ambiguous matches are flagged, not silently forced.
+- Sources below `min_epochs` are retained in `association.below_min_epoch_source_ids`
+  so they can still be retrieved, but they are not plotted as light curves.
 
 Response (abridged; values are illustrative):
 
@@ -1214,7 +1235,7 @@ Response (abridged; values are illustrative):
   "products_processed": 2,
   "sources": [
     {
-      "source_id": "src-...",
+      "source_id": "0123456789abcdef0123456789abcdef",
       "reference_ra_deg": 156.0932,
       "reference_dec_deg": -41.6446,
       "epoch_count": 2,
@@ -1266,6 +1287,10 @@ Response (abridged; values are illustrative):
     "input_epochs": 2,
     "input_detections": 2,
     "source_count": 1,
+    "multi_epoch_sources": 1,
+    "below_min_epoch_sources": 0,
+    "below_min_epoch_source_ids": [],
+    "sources_truncated": false,
     "ambiguous_matches": 0,
     "duplicates_dropped": 0,
     "missing_position_dropped": 0,
@@ -1293,6 +1318,75 @@ Scientific boundaries:
 - Per-epoch failures are returned in `failures`; they are not silently dropped.
   An empty `sources` list with `no_multi_epoch_sources` is a valid "nothing found"
   result, not an error.
+
+### 4.14 `GET /sources/{source_id}`
+
+Returns one source persisted by a completed target light-curve/variability request.
+
+```bash
+curl -s http://localhost:8000/api/v1/sources/0123456789abcdef0123456789abcdef
+```
+
+```json
+{
+  "success": true,
+  "source": {
+    "source_id": "0123456789abcdef0123456789abcdef",
+    "reference_ra_deg": 156.0932,
+    "reference_dec_deg": -41.6446,
+    "detection_count": 2,
+    "epoch_count": 2,
+    "bands": ["SPHEREx-D3"],
+    "detections": [],
+    "position_scatter_arcsec": 0.08,
+    "ambiguity_count": 0,
+    "flags": [],
+    "association_method": "angular_nearest_neighbour",
+    "association_version": "phase3-angular-association-v1"
+  },
+  "target": { "ra": 156.09328159, "dec": -41.64466331 },
+  "query": {
+    "radius_deg": 0.05,
+    "cutout_size_deg": 0.1,
+    "collection": "spherex_qr3",
+    "bands": ["SPHEREx-D3"],
+    "start_date": null,
+    "end_date": null
+  },
+  "provenance": {
+    "created_at": "2026-11-15T00:00:00+00:00",
+    "software": {},
+    "association": "phase3-angular-association-v1",
+    "variability": "phase3-variability-metrics-v1"
+  }
+}
+```
+
+- `source_id` is exactly 32 lowercase hex characters, derived deterministically from
+  the association key. It is internal, not a catalogue identity.
+- Unknown or malformed ids return `404 SOURCE_NOT_FOUND` before any filesystem access.
+- Persisted records survive cache expiry and process restarts. Sources below
+  `min_epochs` are still returned here for review.
+- Each matched detection includes ranked `candidates[]` (with `selected`),
+  `separation_arcsec`, `position_sigma_arcsec` and
+  `effective_match_radius_arcsec` for audit.
+
+### 4.15 `GET /sources/{source_id}/lightcurve`
+
+Returns the persisted `SourceLightCurve` object for one source (per-band `series[]`,
+points, non-detections and metrics). A below-minimum source returns `series: []` with
+`below_min_epochs`/`no_light_curve` flags; flux and upper limits are never invented.
+
+### 4.16 `POST /targets/variability` and `GET /sources/{source_id}/variability`
+
+`POST /targets/variability` accepts the same body as `/targets/lightcurve` and returns
+per-source `band_metrics[]` without repeating point arrays. It still runs the same
+bounded discovery/detection/photometry/association pipeline and returns the same
+`failures[]`, `association` summary and provenance.
+
+`GET /sources/{source_id}/variability` returns the equivalent object for one persisted
+source. Use the compact variability response for review tables and fetch the light
+curve separately for plotting. Metrics remain evidence, not classification.
 
 ---
 
@@ -1328,6 +1422,7 @@ Scientific boundaries:
 | 503 | `IRSA_CUTOUT_UNAVAILABLE` | cutout service busy/error after retries |
 | 503 | `PROCESSING_BUSY` | too many detection/comparison jobs in flight; retry shortly |
 | 504 | `IRSA_TIMEOUT` | IRSA request timed out |
+| 500 | `SOURCE_STORAGE_ERROR` | stored source record is corrupt/unreadable |
 | 500 | `PREVIEW_GENERATION_FAILED` | preview rendering failed (e.g. all pixels invalid) |
 | 500 | `INTERNAL_ERROR` | unexpected server error |
 
@@ -1396,6 +1491,17 @@ curl -s -X POST http://localhost:8000/api/v1/targets/lightcurve \
   -H 'Content-Type: application/json' \
   -d '{"ra":156.09328159,"dec":-41.64466331,"radius_deg":0.05,
        "cutout_size_deg":0.05,"bands":["SPHEREx-D3"],"max_observations":5}'
+
+# Phase 3: target variability metrics only
+curl -s -X POST http://localhost:8000/api/v1/targets/variability \
+  -H 'Content-Type: application/json' \
+  -d '{"ra":156.09328159,"dec":-41.64466331,"radius_deg":0.05,
+       "cutout_size_deg":0.05,"bands":["SPHEREx-D3"],"max_observations":5}'
+
+# Phase 3: persisted source detail, light curve and variability
+curl -s http://localhost:8000/api/v1/sources/<source_id>
+curl -s http://localhost:8000/api/v1/sources/<source_id>/lightcurve
+curl -s http://localhost:8000/api/v1/sources/<source_id>/variability
 ```
 
 ### Python
@@ -1521,8 +1627,10 @@ curves = TargetLightCurveService(observations, detection, photometry)
 detection.detect(DetectionRequest(observation_id="<id>", ra=156.09328159, dec=-41.64466331, size=0.05))
 photometry.measure(PhotometryRequest(observation_id="<id>", ra=156.09328159, dec=-41.64466331, size=0.05))
 curves.build(TargetLightCurveRequest(ra=156.09328159, dec=-41.64466331, radius_deg=0.05, cutout_size_deg=0.05))
+curves.catalog.source("<source_id>")
+curves.catalog.lightcurve("<source_id>")
+curves.catalog.variability("<source_id>")
 ```
-
 Reusable scientific primitives: `prepare_image` (masks/background/noise/PSF/solid angle),
 `detect_prepared`, `measure_sources`, `associate_measurements` and
 `variability_metrics`/`build_light_curves`. The algorithms are deterministic and their
@@ -1580,7 +1688,7 @@ Deterministic suite (mocked HTTP, synthetic FITS fixtures, fixed seeds):
 uv run pytest -q
 ```
 
-Expected: **274 passed, 6 skipped** (the 6 skips are the opt-in live IRSA tests).
+Expected: **280 passed, 7 skipped** (the 7 skips are the opt-in live IRSA tests).
 `compileall` and `pyflakes` are part of the fresh-install check.
 
 Phase 2 review additions:
@@ -1598,10 +1706,11 @@ Phase 3 additions:
 | `tests/test_image_preparation.py` | validity masking, background/noise, variance handling, pixel solid angle, PSF summary, no zero-filling of invalid pixels |
 | `tests/test_source_detection.py` | matched-filter detection, threshold/min-area behaviour, deblending, edge/blend flags, WCS positions, deterministic ids, empty results and provenance |
 | `tests/test_photometry.py` | fractional apertures, annulus/global background fallback, variance uncertainty, MJy/sr to Jy conversion, unit handling, invalid-pixel coverage and no aperture correction |
-| `tests/test_source_association.py` | great-circle matching, same-epoch duplicates, ambiguity flags, missing positions, position scatter and deterministic source ids |
+| `tests/test_source_association.py` | great-circle matching, same-epoch duplicates, ambiguity flags, missing positions, position scatter, uncertainty-aware radii, ranked candidates and deterministic source ids |
 | `tests/test_variability.py` | F_var/χ²/dof/p-value, MAD/robust sigma, baseline/gaps, insufficient-data and undefined-uncertainty states |
 | `tests/test_lightcurve_service.py` | timeline to per-band series, non-detection counts, per-epoch failure isolation, product selection, caching and response contract |
-| `tests/test_source_api.py` | `/sources/detect`, `/sources/photometry`, `/targets/lightcurve`, error envelope, 404/422 behaviour, cache reuse and OpenAPI paths |
+| `tests/test_source_api.py` | `/sources/detect`, `/sources/photometry`, `/targets/lightcurve`, `/targets/variability`, `/sources/{id}/*`, source persistence across cache clear, single-epoch retention, typed 404, error envelope, 422 behaviour and OpenAPI paths |
+| `tests/test_live_phase3.py` | opt-in live two-epoch D3 detection, photometry, association, variability and persisted source round-trip |
 
 ### Fresh-install integration check
 
@@ -1682,11 +1791,19 @@ timeline 126 products → 63 observations → 63 epochs, 33.81-day baseline,
 live service: 2 passed in 93 s | live API workflow: 1 passed in 73 s
 ```
 
-Phase 3 deterministic suite (`uv run pytest -q`): **274 passed, 6 skipped** —
-the Phase 2 baseline plus 51 Phase 3 tests covering image preparation, detection,
-aperture photometry, association, variability, the target light-curve service and
-the three new API routes. The 6 skips are still the opt-in live IRSA tests; no live
-Phase 3 validation has been recorded yet.
+Phase 3 deterministic suite (`uv run pytest -q`, run twice): **280 passed, 7 skipped**
+in 34-57 s - the Phase 2 baseline plus 57 Phase 3 tests covering image preparation,
+detection, aperture photometry, uncertainty-aware association, variability, the target
+light-curve service, source persistence and the new API routes. The 7 skips are the
+opt-in live IRSA tests. `pyflakes`, `compileall` and `git diff --check` are clean.
+
+Phase 3 live validation on 2026-11-15:
+
+```
+detect/photometer 2 D3 epochs at RA 156.09328159, Dec -41.64466331
+association: per-band series + variability metrics; persisted source round-trip
+1 passed in 40.23 s
+```
 
 Phase 2 live validation on 2026-11-14 (after IRSA's proxy recovered):
 
@@ -1851,10 +1968,11 @@ Phase 3 scientific limitations (explicit, not hidden):
     from the projection-plane WCS model. This is appropriate for the small SPHEREx
     cutouts used here but is not a full spherical-area integration for large or strongly
     distorted fields.
-28. **Association uses a fixed angular radius.** Matching is great-circle nearest
-    neighbour with a configurable radius (default 6 arcsec). Ambiguities are flagged, but
-    proper motion, extended sources and chance coincidences are not modelled. An
-    internal `source_id` is not a catalogue identity.
+28. **Association is angular nearest-neighbour.** The base radius is expanded by a
+    bounded centroid-uncertainty term, and candidate alternatives are ranked. Proper
+    motion, extended-source morphology and chance coincidences are not modelled, and
+    the centroid uncertainty excludes WCS/astrometric calibration error. An internal
+    `source_id` is not a catalogue identity.
 29. **Light curves are not forced-photometry products.** A point exists only when the
     source is detected in that epoch and band. `non_detections` counts missing epochs;
     it is not an upper limit. There is no image-level combination across bands.
@@ -1862,9 +1980,14 @@ Phase 3 scientific limitations (explicit, not hidden):
     `chi2`, `chi2_pvalue`, MAD/robust sigma and ranges assume independent Gaussian
     measurement errors. Correlated noise, crowding and calibration drift are not
     included. No candidate classification or significance claim is made.
-31. **The light-curve endpoint is synchronous.** It processes at most
-    `max_observations` epochs per request (default 20, maximum 200) and has no job queue,
-    cancellation or progress stream. Large requests can exceed normal HTTP timeouts.
-32. **One product per epoch/band.** Detection/photometry caches are keyed by the selected
-    product, target and config. If several products share an epoch/band, the service
-    chooses one deterministically; duplicate products are not averaged.
+31. **The light-curve and variability endpoints are synchronous.** They process at most
+    `max_observations` epochs per request (default 20, maximum 200) and have no job
+    queue, cancellation or progress stream. Large requests can exceed normal HTTP
+    timeouts.
+32. **One product per epoch.** If several products share an epoch/band, the service
+    chooses one deterministically; duplicate products are not averaged. All requested
+    bands for a selected epoch are retained.
+33. **Persisted source records are best-effort and bounded.** Source/light-curve JSON is
+    written under `storage/`; a write failure is logged but does not fail the target
+    response, so a subsequent `GET /sources/{id}` can return 404 until a retry succeeds.
+    Stored records are never used to fabricate new measurements.
