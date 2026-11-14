@@ -55,6 +55,20 @@ class Settings(BaseSettings):
     psf_fail_ratio: float = 1.4
     max_concurrent_comparisons: int = 2
 
+    # Source detection and photometry (Phase 3)
+    detection_threshold_sigma: float = 5.0
+    detection_min_area_px: int = 5
+    detection_max_sources: int = 500
+    detection_filter_fwhm_px: float = 1.5
+    detection_edge_margin_px: int = 2
+    detection_background_mesh: int = 4
+    photometry_aperture_fwhm_factor: float = 3.0
+    photometry_annulus_inner_factor: float = 1.3
+    photometry_annulus_outer_factor: float = 2.0
+    photometry_aperture_oversample: int = 8
+    photometry_min_valid_fraction: float = 0.5
+    max_concurrent_detections: int = 2
+
     # Ops
     log_level: str = "INFO"
     cors_origins: tuple[str, ...] = (
@@ -87,10 +101,20 @@ class Settings(BaseSettings):
     def comparisons_dir(self) -> Path:
         return self.storage_dir / "comparisons"
 
+    @property
+    def sources_dir(self) -> Path:
+        return self.storage_dir / "sources"
+
+    @property
+    def lightcurves_dir(self) -> Path:
+        return self.storage_dir / "lightcurves"
+
     def ensure_dirs(self) -> None:
         self.fits_dir.mkdir(parents=True, exist_ok=True)
         self.previews_dir.mkdir(parents=True, exist_ok=True)
         self.comparisons_dir.mkdir(parents=True, exist_ok=True)
+        self.sources_dir.mkdir(parents=True, exist_ok=True)
+        self.lightcurves_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

@@ -130,3 +130,33 @@ class ProcessingBusyError(PlanetXError):
 class ReprojectionError(PlanetXError):
     code = "REPROJECTION_FAILED"
     status_code = 422
+
+
+class ImagePreparationError(PlanetXError):
+    code = "IMAGE_PREPARATION_FAILED"
+    status_code = 422
+
+
+class SourceDetectionError(PlanetXError):
+    code = "SOURCE_DETECTION_FAILED"
+    status_code = 422
+
+
+class SourceNotFoundError(PlanetXError):
+    code = "SOURCE_NOT_FOUND"
+    status_code = 404
+
+
+class SourceStorageError(PlanetXError):
+    code = "SOURCE_STORAGE_ERROR"
+    status_code = 500
+
+
+class PhotometryError(PlanetXError):
+    code = "PHOTOMETRY_FAILED"
+    status_code = 422
+
+
+class InsufficientDataError(PlanetXError):
+    code = "INSUFFICIENT_DATA"
+    status_code = 422
