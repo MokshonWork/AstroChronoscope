@@ -5,19 +5,22 @@ interface BlackHoleProps extends BlackHoleOptions {
   className?: string;
   /** Called once the scene is running. Handy for tweaking `handle.uniforms`. */
   onReady?: (handle: BlackHoleHandle) => void;
+  /** Called if initialization fails. */
+  onError?: (error: Error) => void;
 }
 
 /**
  * Full-size black hole. It fills its parent, so give the parent a size
  * (for example `fixed inset-0`).
  */
-export default function BlackHole({ className, onReady, ...options }: BlackHoleProps) {
+export default function BlackHole({ className, onReady, onError, ...options }: BlackHoleProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   // The scene is created once; later prop changes are not applied.
   const optionsRef = useRef(options);
   const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -45,7 +48,11 @@ export default function BlackHole({ className, onReady, ...options }: BlackHoleP
       })
       .catch((err: unknown) => {
         console.error(err);
-        if (!cancelled) setError(err instanceof Error ? err.message : "Could not start the black hole");
+        const errObj = err instanceof Error ? err : new Error("Could not start the black hole");
+        if (!cancelled) {
+          setError(errObj.message);
+          onErrorRef.current?.(errObj);
+        }
       });
 
     return () => {

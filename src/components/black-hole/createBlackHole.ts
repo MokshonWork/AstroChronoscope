@@ -5,6 +5,27 @@ import { equirectUV, pass, texture } from "three/tsl";
 import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { createBlackHoleMaterial, type BlackHoleUniforms } from "./blackHoleMaterial";
 
+THREE.Cache.enabled = true;
+
+// In-memory cache for the black hole textures
+let cachedTexturesPromise: Promise<[THREE.Texture, THREE.Texture]> | null = null;
+
+function loadCachedTextures(textureBase: string): Promise<[THREE.Texture, THREE.Texture]> {
+  if (!cachedTexturesPromise) {
+    const loader = new THREE.TextureLoader();
+    cachedTexturesPromise = Promise.all([
+      loader.loadAsync(`${textureBase}noise_deep.png`),
+      loader.loadAsync(`${textureBase}nebula.png`),
+    ]).then(([noiseTexture, starsTexture]) => {
+      starsTexture.mapping = THREE.EquirectangularReflectionMapping;
+      starsTexture.colorSpace = THREE.SRGBColorSpace;
+      starsTexture.needsUpdate = true;
+      return [noiseTexture, starsTexture] as [THREE.Texture, THREE.Texture];
+    });
+  }
+  return cachedTexturesPromise;
+}
+
 export interface BlackHoleOptions {
   /** Upper bound for the device pixel ratio. Lower it to trade sharpness for FPS. */
   maxPixelRatio?: number;
@@ -54,15 +75,8 @@ export async function createBlackHole(
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
   renderer.setSize(size().width, size().height, false);
 
-  // ---- Textures ----
-  const loader = new THREE.TextureLoader();
-  const [noiseTexture, starsTexture] = await Promise.all([
-    loader.loadAsync(`${textureBase}noise_deep.png`),
-    loader.loadAsync(`${textureBase}nebula.png`),
-  ]);
-  starsTexture.mapping = THREE.EquirectangularReflectionMapping;
-  starsTexture.colorSpace = THREE.SRGBColorSpace;
-  starsTexture.needsUpdate = true;
+  // ---- Textures (cached) ----
+  const [noiseTexture, starsTexture] = await loadCachedTextures(textureBase);
 
   await renderer.init();
 
