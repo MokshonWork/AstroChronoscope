@@ -71,6 +71,37 @@ if (comparison.status === "completed") {
 }
 ```
 
+Phase 3 (detection + aperture photometry + light curves):
+
+```ts
+// detect sources in one selected epoch/product
+const detection = await fetch(`${API_BASE}/sources/detect`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ observation_id: observation.observation_id, ra: 156.09328159, dec: -41.64466331, size: 0.05 }),
+}).then(r => r.json());
+
+// aperture photometry (same fields; adds flux_jy / flux_jy_error)
+const photometry = await fetch(`${API_BASE}/sources/photometry`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ observation_id: observation.observation_id, ra: 156.09328159, dec: -41.64466331, size: 0.05 }),
+}).then(r => r.json());
+
+// target light curve across epochs; keep max_observations small for a first call
+const curve = await fetch(`${API_BASE}/targets/lightcurve`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    ra: 156.09328159, dec: -41.64466331,
+    radius_deg: 0.05, cutout_size_deg: 0.05,
+    bands: ["SPHEREx-D3"], max_observations: 5,
+  }),
+}).then(r => r.json());
+// Render curve.sources[].series[] by band. Non-detections are counts, not zero flux.
+// Metrics are evidence, not a classification.
+```
+
 ---
 
 ## 2. Base URL, origin and file URLs
@@ -188,6 +219,9 @@ When an origin is not allowed, the preflight fails with HTTP 400 and no
 | `POST` | `/api/v1/images/inspect` | FITS/WCS/mask/variance/PSF inspection | ~5–60 s (cached instant) |
 | `POST` | `/api/v1/images/compare` | validated pairwise difference imaging | ~10–120 s (cached instant) |
 | `GET` | `/api/v1/images/comparisons/{comparison_id}` | stored comparison record | immediate |
+| `POST` | `/api/v1/sources/detect` | source detection in one product/cutout | ~5–60 s (cached instant) |
+| `POST` | `/api/v1/sources/photometry` | aperture photometry in one product/cutout | ~5–60 s (cached instant) |
+| `POST` | `/api/v1/targets/lightcurve` | multi-epoch detection, photometry and per-band light curves | ~30 s–several min (bounded by `max_observations`) |
 | `GET` | `/api/v1/files/{filename}` | serve generated preview/FITS | immediate |
 
 Search and cutout are `POST` because they carry parameters in a JSON body. There is no
@@ -611,6 +645,122 @@ Returns the stored comparison record (same schema as the compare response). Use 
 re-render a previous result or to recover after a page reload. The id is the 32-hex
 prefix of the deterministic cache key. Unknown/malformed ids → `404 COMPARISON_NOT_FOUND`.
 
+### 5.11 `POST /sources/detect`
+
+Detects compact sources in one product/cutout.
+
+```ts
+{
+  observation_id: string;      // required; opaque id
+  ra?: number;                 // optional, must be paired with dec
+  dec?: number;
+  size?: number;               // cutout size in degrees; ignored without ra/dec
+  config?: {
+    threshold_sigma?: number;  // default 5 (1-20)
+    min_area_px?: number;      // default 5
+    max_sources?: number;      // default 500
+    filter_fwhm_px?: number;   // default 1.5
+    edge_margin_px?: number;   // default 2
+    background_mesh?: number;  // default 4
+    deblend?: boolean;         // default true
+  };
+}
+```
+
+Key response fields:
+
+- `image`: shape, `BUNIT`, valid/masked pixel counts, pixel scale/solid angle, PSF FWHM.
+- `background`: `method`, `level`, `sigma`, `reliable`.
+- `detections[]`: `detection_id`, `x`/`y`, `ra_deg`/`dec_deg`, `peak_value` (native
+  pixel value, **not flux**), `source_area`, `centroid_x`/`centroid_y`, `detection_snr`,
+  `fwhm_px`/`fwhm_arcsec`, `blended`, `flags`, `quality`.
+- `total_detections`, `truncated`, `quality.overall_status` (`PASS`/`WARNING`/`FAIL`/
+  `NOT_VERIFIED`), `provenance`.
+
+`ra`/`dec` must be supplied together; supplying neither analyses the full product
+(slower, larger). Empty `detections` is a valid result. Render `quality` and `flags`;
+do not treat every detection as a confirmed source.
+
+### 5.12 `POST /sources/photometry`
+
+Same request fields as `/sources/detect`, plus optional `photometry`:
+
+```ts
+{
+  observation_id: string;
+  ra?: number;
+  dec?: number;
+  size?: number;
+  detection?: DetectionConfig;
+  photometry?: {
+    aperture_fwhm_factor?: number;   // default 3
+    annulus_inner_factor?: number;   // default 1.3
+    annulus_outer_factor?: number;   // default 2.0
+    aperture_oversample?: number;    // default 8
+    min_valid_fraction?: number;     // default 0.5
+  };
+}
+```
+
+`measurements[]` adds, per detection: `aperture_radius_px`,
+`aperture_valid_fraction`, `psf_fwhm_px`/`fwhm_source`, `aperture_sum` and
+`aperture_sum_unit` (native), `background_level`/`background_method`,
+`solid_angle_sr`, `flux_mjy`, `flux_jy`, `flux_jy_error`, `snr`, `uncertainty_method`,
+`aperture_correction_applied` (always `false`) and `quality`.
+
+- Plot/filter on `flux_jy`; show `aperture_valid_fraction`, `quality` and `flags`.
+- `flux_jy` is `null` when units cannot be converted; do not substitute the native sum.
+- `snr` is per-measurement, not a variability significance.
+- Invalid pixels are excluded, never zero-filled. Negative flux is preserved.
+
+### 5.13 `POST /targets/lightcurve`
+
+```ts
+{
+  ra: number;
+  dec: number;
+  radius_deg?: number;       // archive search radius, default 0.05
+  cutout_size_deg?: number;  // image cutout, default 0.1
+  collection?: string;
+  bands?: string[];
+  start_date?: string;
+  end_date?: string;
+  max_observations?: number; // default 20, max 200
+  detection?: DetectionConfig;
+  photometry?: PhotometryConfig;
+  association?: {
+    match_radius_arcsec?: number;     // default 6
+    ambiguity_margin_arcsec?: number; // default 1
+    min_epochs?: number;              // default 2
+    max_sources?: number;             // default 100
+  };
+}
+```
+
+Response fields:
+
+- `epochs_considered`, `epochs_processed`, `products_processed`.
+- `sources[]`: `source_id` (internal, not a catalogue id), reference RA/Dec,
+  `epoch_count`, `bands`, `position_scatter_arcsec`, `flags`.
+- `sources[].series[]`: one series per band with `points[]`, `expected_epochs`,
+  `non_detections` and `metrics`.
+- `points[]`: `time_utc`, `time_mjd`, `flux_jy`, `flux_jy_error`, `unit` (`"Jy"`),
+  `band`, `observation_id`, `detection_id`, `snr`, `quality`, `flags`.
+- `metrics`: `status` (`computed`/`insufficient_data`/`undefined_uncertainties`),
+  `n_points`, mean/median/weighted mean, std/MAD/robust sigma,
+  `fractional_variability`, `chi2`/`dof`/`reduced_chi2`/`chi2_pvalue`,
+  `peak_to_peak_jy`, `robust_range_jy`, `temporal_baseline_days`, `max_gap_days`.
+- `failures[]`: per-epoch failures (`code`, `message`) - show them, do not hide them.
+
+Rules:
+
+- One product is selected per epoch/band; bands are never merged.
+- Non-detections are counts, not zero flux or upper limits.
+- Metrics are evidence, not a classification. Do not label a source "variable",
+  "transient" or "confirmed" from this response.
+- The endpoint is synchronous and bounded by `max_observations`; show a loading state,
+  start with a small value, and let the user retry. No job id/progress stream exists.
+
 ---
 
 ## 6. Observation identifiers
@@ -650,6 +800,15 @@ For a time-domain view, call `GET /targets/timeline` with the same target instea
 step 2. Render `epochs[]` in order and use each product's `observation_id` for the
 existing detail/cutout calls. Do not infer comparability from multiple epochs; the
 response explicitly sets `metadata.comparability_assessed = false`.
+
+For Phase 3, call `POST /targets/lightcurve` with the target and a small
+`max_observations` (for example 5) to get per-band series. Render `points[]` with error
+bars, group by `series[].band`, and show `series[].non_detections`, `metrics.status`,
+`failures[]`, quality and provenance. Do not join bands into one series and do not
+present a metric or a candidate pattern as a confirmed astrophysical event. The call is
+synchronous, so keep a loading/retry state and increase `max_observations` deliberately.
+For one epoch only, `POST /sources/detect` and `/sources/photometry` expose the same
+measurements without the timeline/association step.
 
 ---
 
@@ -877,19 +1036,25 @@ curl -s http://localhost:8000/api/v1/images/comparisons/<comparison_id> | jq '{s
 
 Do not build UI on top of features that do not exist in this backend:
 
-- light curves or time-series analysis
-- source detection / catalogue photometry / significance maps
+- PSF photometry, forced photometry or deblending beyond the simple local-maximum split
 - spectral extraction or spectral cubes
-- deconvolution or image-based re-registration (alignment is validated, not corrected)
+- image-based re-registration / deconvolution (alignment is validated, not corrected)
+- candidate classification, transient confirmation or significance maps
+- background jobs, progress streams or cancellation for long analyses
 - authentication, quotas, or per-user storage
 
 Implemented: multi-epoch discovery (`GET /targets/timeline`), single-epoch retrieval,
 metadata, WCS validation, previews, FITS inspection (`POST /images/inspect`), validated
-pairwise difference imaging (`POST /images/compare`) and stored comparison records
-(`GET /images/comparisons/{id}`).
+pairwise difference imaging (`POST /images/compare`), stored comparison records
+(`GET /images/comparisons/{id}`), source detection (`POST /sources/detect`), aperture
+photometry (`POST /sources/photometry`) and target light curves with variability metrics
+(`POST /targets/lightcurve`).
 
 For comparison UIs: render `quality.checks` rather than only the image, and never treat
 HTTP `200` as "the science passed" — check `status` / `scientifically_valid`.
+For detection/photometry/light-curve UIs: render quality flags and provenance, do not
+call a detection a confirmed source, and do not call a variability metric a
+classification.
 
 ---
 

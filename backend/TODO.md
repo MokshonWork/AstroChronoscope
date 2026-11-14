@@ -172,7 +172,7 @@ Single source of truth for backend progress. Updated at the end of each phase.
 - [x] Add deterministic tests (`tests/test_timeline_service.py`, `tests/test_timeline_api.py`).
 - [x] Add opt-in live invariants test (`tests/test_live_timeline.py`).
 - [x] Update README, frontend integration guide and TODO.
-- [ ] Phase 3: photometry / light curves (not started).
+- [x] Phase 3: photometry / light curves implemented; see section N.
 - [ ] Optional: persist timeline caches or add a target/epoch database if query volume grows.
 
 ## M. Phase 2 — FITS Inspection & Multi-Epoch Image Comparison
@@ -192,7 +192,23 @@ Single source of truth for backend progress. Updated at the end of each phase.
 - [x] Opt-in live test (`tests/test_live_image_comparison.py`); never substitutes another survey.
 - [x] Update README (4.8–4.10, architecture, errors, examples, limitations 13–20), `docs/FRONTEND_INTEGRATION.md` (5.8–5.10, errors, runbook, troubleshooting), TODO.
 - [x] Live validation (2026-11-14): real SPHEREx D3 pair 33 days apart → all 12 checks PASS, 89.2% coverage, 0.03 px residual, difference/uncertainty/mask FITS + PNG served; `RUN_LIVE=1 pytest -q tests/test_live_image_comparison.py` → 2 passed in 46 s.
-- [ ] Phase 3: photometry / light curves / variability detection (not started).
+## N. Phase 3 - Source Detection, Photometry, Association & Light Curves
+
+- [x] Add Phase 3 schemas (`app/schemas/sources.py`, `photometry.py`, `lightcurve.py`) with quality vocabulary, provenance and algorithm version strings.
+- [x] Add Phase 3 settings (`DETECTION_*`, `PHOTOMETRY_*`, `MAX_CONCURRENT_DETECTIONS`) and `storage/sources/`, `storage/lightcurves/`.
+- [x] Add source/photometry/lightcurve/variability caches and shared artifact resolver (`app/services/artifact_resolver.py`, `app/core/versions.py`).
+- [x] Implement image preparation (`app/services/image_preparation.py`): validity mask, variance masking, sigma-clipped background/noise, mesh variation, PSF summary, projection-plane pixel solid angle; invalid pixels never zero-filled.
+- [x] Implement source detection (`app/services/source_detection.py`): mask-normalised matched filter, threshold, connected components, nearest-peak deblend, flux-weighted centroids, second-moment shapes, WCS positions, deterministic ids, edge/blend flags.
+- [x] Implement aperture photometry (`app/services/photometry.py`): fractional apertures, annulus/global background fallback, variance-aware uncertainty, explicit MJy/sr -> Jy conversion, unsupported-unit handling, no aperture correction.
+- [x] Implement cross-epoch association (`app/services/source_association.py`): great-circle nearest neighbour, ambiguity/duplicate/missing-position audit, deterministic internal source ids and position scatter.
+- [x] Implement variability metrics (`app/services/variability.py`): mean/median/weighted mean, std/MAD/robust sigma, F_var, chi2/dof/p-value, range, baseline and gaps; undefined values remain null.
+- [x] Implement end-to-end target light curves (`app/services/lightcurve_service.py`): timeline -> one product per epoch/band -> detection -> photometry -> association -> per-band series, non-detection counts, per-epoch failures and caching.
+- [x] Add `POST /api/v1/sources/detect`, `POST /api/v1/sources/photometry`, `POST /api/v1/targets/lightcurve`, dependency wiring and OpenAPI documentation.
+- [x] Add deterministic tests: image preparation, detection, photometry, association, variability, light-curve service and API contract (51 Phase 3 tests).
+- [x] Validate deterministic suite: `274 passed, 6 skipped`; `pyflakes app tests` clean.
+- [x] Update README (4.11-4.13, architecture, data flow, config, errors, examples, limitations 24-32), frontend integration guide (5.11-5.13), TODO.
+- [ ] Live Phase 3 validation against real SPHEREx epochs (not yet recorded).
+- [ ] PSF/forced photometry, candidate ranking and classification remain future phases.
 
 ## Validation log (2026-11-14, multi-epoch timeline)
 
@@ -257,13 +273,18 @@ Single source of truth for backend progress. Updated at the end of each phase.
 - [ ] IRSA SIA `ID=` currently returns `502 Proxy Error` or read timeouts (external); detail lookups for uncached/unknown IDs surface `503 IRSA_UNAVAILABLE`. Re-check when IRSA is healthy; malformed IDs still return `404 OBSERVATION_NOT_FOUND` locally.
 - [x] SPHEREx `obs_id` is not unique across bands; `obs_publisher_did` is used as the stable per-product identity.
 - [x] Preview is display-only; no photometric calibration is applied.
-- [x] Multi-epoch **discovery** is implemented (`GET /targets/timeline`) and pairwise **comparison** is implemented (`POST /images/compare`); light curves, catalogue photometry and spectra are NOT.
+- [x] Multi-epoch **discovery** (`GET /targets/timeline`), pairwise **comparison** (`POST /images/compare`), source **detection** (`POST /sources/detect`), aperture **photometry** (`POST /sources/photometry`) and per-band **light curves** (`POST /targets/lightcurve`) are implemented; PSF/forced photometry, spectra and candidate classification are not.
 - [ ] IRSA SIA is intermittently unavailable (`502 Proxy Error`, observed 2026-11-14). POS queries recovered and both live Phase 2 tests pass; `ID=` lookups still flake and surface as `503 IRSA_UNAVAILABLE`. Re-check when IRSA is stable.
 - [x] Timeline epoch = one unique `obs_id`. No documented visit/sequence grouping exists in SIA2, so `unique_observations == unique_epochs` and consecutive exposures stay separate.
 - [x] Timeline `observation_time` is the arithmetic midpoint of SIA2 `t_min`/`t_max`. FITS `MJD-AVG` matches it for SPHEREx; other collections may define `t_min`/`t_max` differently and need their own check.
 - [x] `target_covered` is footprint-based (`s_region` POLYGON/CIRCLE). Unsupported encodings return `null` + `invalid_spatial_metadata`, never a guessed boolean.
 - [x] Timeline `comparability_assessed` is always `false`; multiple epochs do not imply subtraction/photometry validity.
-- [ ] Phase 3 (photometry/light curves) not started.
+- [ ] Live Phase 3 validation against real SPHEREx epochs not yet recorded; all Phase 3 tests currently use deterministic fixtures.
+- [x] Phase 3 detection is a single global-noise matched-filter baseline; crowding, extended sources and structured backgrounds need re-tuning (documented limitation).
+- [x] Phase 3 photometry is circular-aperture only, with no aperture/PSF correction and no forced photometry; flux conversion uses the projection-plane pixel solid angle.
+- [x] Phase 3 association is fixed angular nearest-neighbour with ambiguity flags; internal source ids are not catalogue identities.
+- [x] Phase 3 light curves count non-detections instead of fabricating zero flux/upper limits; variability metrics are evidence, not classification.
+- [x] Phase 3 light-curve endpoint is synchronous and bounded by `max_observations`; no job queue/progress stream yet.
 - [x] Phase 2 reprojection is interpolation of calibrated surface brightness on the reference grid — **not flux-conserving** (`flux_conserving: false`); no `reproject`/`photutils`/`scikit-image` dependency was added.
 - [x] Phase 2 alignment is measured (FFT phase correlation), never applied; residual > `MAX_ALIGNMENT_RESIDUAL_PX` rejects the comparison.
 - [x] Phase 2 PSF matching uses the real EPSF FWHM but a single global Gaussian kernel (documented approximation). Spatially varying PSFs are unsupported; missing EPSF/oversampling → `NOT_VERIFIED` (never `PASS`), `matching_supported: false`, `matched: false`.

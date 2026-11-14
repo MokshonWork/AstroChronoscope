@@ -10,7 +10,10 @@ from app.core.cache import CacheStore
 from app.core.config import Settings, get_settings
 from app.services.irsa_client import IrsaClient
 from app.services.image_comparison import ImageComparisonService
+from app.services.lightcurve_service import TargetLightCurveService
 from app.services.observation_service import ObservationService
+from app.services.photometry import PhotometryService
+from app.services.source_detection import SourceDetectionService
 from app.services.timeline_service import TimelineService
 
 
@@ -48,3 +51,24 @@ def get_image_comparison_service(
     observations: ObservationService = Depends(get_observation_service),
 ) -> ImageComparisonService:
     return ImageComparisonService(observations)
+
+
+def get_source_detection_service(
+    observations: ObservationService = Depends(get_observation_service),
+) -> SourceDetectionService:
+    return SourceDetectionService(observations)
+
+
+def get_photometry_service(
+    observations: ObservationService = Depends(get_observation_service),
+    detection: SourceDetectionService = Depends(get_source_detection_service),
+) -> PhotometryService:
+    return PhotometryService(observations, detection)
+
+
+def get_target_lightcurve_service(
+    observations: ObservationService = Depends(get_observation_service),
+    detection: SourceDetectionService = Depends(get_source_detection_service),
+    photometry: PhotometryService = Depends(get_photometry_service),
+) -> TargetLightCurveService:
+    return TargetLightCurveService(observations, detection, photometry)
