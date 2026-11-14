@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { TwinOrbit } from "@/components/loading-ui/twin-orbit";
+import Dashboard from "@/components/Dashboard";
 
 // three.js is large, so load the black hole in its own chunk.
 const BlackHole = lazy(() => import("./components/black-hole/BlackHole"));
@@ -78,26 +79,9 @@ function App() {
 
       {/* Dashboard View */}
       {currentRoute === "dashboard" && (
-        <main className="relative z-10 min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 select-none">
-          <div className="flex flex-col items-center gap-6 text-center">
-            <h1
-              className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-[0.25em] font-bodoni text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.95)]"
-              style={{ fontFamily: "'OPTIBodoni-Antiqua', serif" }}
-            >
-              DASHBOARD in CONSTRUCTION
-            </h1>
-
-            <button
-              onClick={navigateToLanding}
-              className="group relative inline-flex items-center justify-center gap-2 rounded-full border border-white/20 bg-black/40 hover:bg-white/10 hover:border-white/50 px-6 py-2 text-[11px] sm:text-xs font-medium tracking-[0.25em] uppercase text-neutral-400 hover:text-white backdrop-blur-md transition-all duration-300 cursor-pointer active:scale-95"
-            >
-              <span className="text-[11px] opacity-60 group-hover:-translate-x-0.5 transition-transform duration-200">
-                ←
-              </span>
-              <span>Return</span>
-            </button>
-          </div>
-        </main>
+        <div className="relative z-10 w-full h-full min-h-screen bg-black">
+          <Dashboard onReturnToLanding={navigateToLanding} />
+        </div>
       )}
 
       {/* Landing Page Content */}
