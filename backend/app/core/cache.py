@@ -50,9 +50,15 @@ class CacheStore:
         self.observations = TTLCache(ttl_seconds, max_entries)
         self.timeline = TTLCache(ttl_seconds, max_entries)
         self.comparisons = TTLCache(ttl_seconds, max_entries)
+        self.sources = TTLCache(ttl_seconds, max_entries)
+        self.lightcurves = TTLCache(ttl_seconds, max_entries)
+        self.variability = TTLCache(ttl_seconds, max_entries)
 
     def clear(self) -> None:
         self.search.clear()
         self.observations.clear()
         self.timeline.clear()
         self.comparisons.clear()
+        self.sources.clear()
+        self.lightcurves.clear()
+        self.variability.clear()
