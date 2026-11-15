@@ -186,3 +186,73 @@ class ProcessingBusyError(PlanetXError):
 class ReprojectionError(PlanetXError):
     code = "REPROJECTION_FAILED"
     status_code = 422
+
+
+class ImagePreparationError(PlanetXError):
+    code = "IMAGE_PREPARATION_FAILED"
+    status_code = 422
+
+
+class SourceDetectionError(PlanetXError):
+    code = "SOURCE_DETECTION_FAILED"
+    status_code = 422
+
+
+class SourceNotFoundError(PlanetXError):
+    code = "SOURCE_NOT_FOUND"
+    status_code = 404
+
+
+class SourceStorageError(PlanetXError):
+    code = "SOURCE_STORAGE_ERROR"
+    status_code = 500
+
+
+class PhotometryError(PlanetXError):
+    code = "PHOTOMETRY_FAILED"
+    status_code = 422
+
+
+class InsufficientDataError(PlanetXError):
+    code = "INSUFFICIENT_DATA"
+    status_code = 422
+
+
+class SpectralProductNotFoundError(PlanetXError):
+    code = "SPECTRAL_PRODUCT_NOT_FOUND"
+    status_code = 404
+
+
+class SpectralProductUnsupportedError(PlanetXError):
+    code = "SPECTRAL_PRODUCT_UNSUPPORTED"
+    status_code = 422
+
+
+class SpectralProductTooLargeError(PlanetXError):
+    code = "SPECTRAL_PRODUCT_TOO_LARGE"
+    status_code = 422
+
+
+class SpectralProductUnavailableError(PlanetXError):
+    code = "SPECTRAL_PRODUCT_UNAVAILABLE"
+    status_code = 503
+
+
+class SpectralTargetOutsideProductError(PlanetXError):
+    code = "SPECTRAL_TARGET_OUTSIDE_PRODUCT"
+    status_code = 422
+
+
+class SpectralExtractionError(PlanetXError):
+    code = "SPECTRAL_EXTRACTION_FAILED"
+    status_code = 422
+
+
+class SpectrumNotFoundError(PlanetXError):
+    code = "SPECTRUM_NOT_FOUND"
+    status_code = 404
+
+
+class SpectrumStorageError(PlanetXError):
+    code = "SPECTRUM_STORAGE_ERROR"
+    status_code = 500
