@@ -249,12 +249,60 @@ curl http://localhost:8000/api/v1/catalogs/gaia/5416565780217346432
 Returns `{"success": true, "source": {...}}`; unknown but well-formed ids → 404
 (`GAIA_SOURCE_NOT_FOUND`); malformed ids → 400 (`INVALID_GAIA_SOURCE_ID`).
 
-### `GET /api/v1/sources/{source_id}/catalogs` — **future (Phase 3)**
+### `GET /api/v1/sources/{source_id}/catalogs` — **Source association**
 
-Intentionally **not implemented**: there is no internal source schema yet and
-none was invented. Once Phase 3's source model exists, this endpoint can be
-added on top of `GaiaService`/`CatalogCrossMatcher` without changes to them.
-Gaia lookup and coordinate cross-matching are fully functional today.
+Gaia DR3 counterpart candidates for one **persisted Phase 3 source**.
+Implemented after the Phase 3 merge against the real source catalogue
+(`SourceCatalogService`); no second source database was invented and no
+persistent association store was added — the endpoint computes on demand and the
+underlying Gaia cone queries are cached in `CacheStore.gaia` as usual.
+
+- `source_id` is the **internal 32-hex Planet X identifier**
+  (`^[0-9a-f]{32}$`). It is reported as `planetx_source_id`; every Gaia
+  identifier in the response is `gaia_source_id` / the nested Gaia
+  `source_id`. The two namespaces are never interchangeable — a Gaia-style
+  numeric id fails the internal-id validation → 404 `SOURCE_NOT_FOUND`.
+- Coordinates come from the Phase 3 record
+  (`reference_ra_deg`/`reference_dec_deg`, mean ICRS positions). Candidate
+  evaluation reuses `CatalogCrossMatcher` unchanged: spherical separation,
+  configurable radius, `MATCHED`/`AMBIGUOUS`/`UNMATCHED`, ambiguity never
+  forced, optional proper-motion propagation.
+- **Observation epoch** (`observation_epoch`): derived as the mean of the
+  source's detection timestamps (`time_mjd` → Julian year, capped at 200
+  samples), reported with its explicit `basis` string. When the record has no
+  timestamps the field is `null` with a `limitation`, and the Gaia catalogue
+  position (J2016.0) is used unpropagated — never implied to be epoch-aligned.
+- **Significance** (`significance`): scalar positional-uncertainty statistic
+  (Phase 3's `position_scatter_arcsec` has no covariance matrix and Gaia DR3
+  gives scalar `ra_error`/`dec_error`):
+  `sigma_gaia = hypot(ra_error, dec_error)/1000 [arcsec]`,
+  `sigma_comb = hypot(phase3_scatter, sigma_gaia)`,
+  `normalized_separation = separation / sigma_comb`,
+  `match_p_value = exp(-d²/(2·sigma_comb²))` — the Rayleigh tail for a 2-D
+  Gaussian offset with independent per-axis errors. Assumptions are returned on
+  the response; when only one uncertainty source exists the combined sigma is
+  that single value and the assumption is stated. When the data needed are
+  missing the statistic is `null` with a `limitation` — **nothing is
+  fabricated**. It is not a probability of physical association. RUWE is never
+  used as positional uncertainty or as a rejection rule.
+- `phase3` echoes the source context (epoch/detection counts, bands, scatter,
+  flags, association method); `propagation` is the cross-match epoch info.
+- Errors: 404 `SOURCE_NOT_FOUND` (unknown/malformed internal id), 503
+  `GAIA_UNAVAILABLE` etc. via the standard envelope — an archive failure is
+  never an empty success.
+
+`POST /api/v1/sources/{source_id}/catalogs/gaia/match` remains **deferred**:
+associations are computed on demand and Phase 3 pipeline re-runs rebuild source
+records, so a separate persistent association store would be inconsistent today.
+
+### Spectrum boundary (Phase 4)
+
+Spectra linked to the same internal id are retrievable via the existing
+`GET /sources/{id}/spectra`; no spectrum-scoped Gaia endpoint was added because
+Gaia G/BP/RP magnitudes cannot be combined with SPHEREx DR1
+surface-brightness channels (different measurement kinds) and DR1 spectral
+uncertainty stays `NOT_VERIFIED`. The association response documents this
+boundary; nothing mixes Gaia photometry with spectral flux arrays.
 
 ## 9. Caching
 
@@ -315,17 +363,25 @@ is safe. Timeouts use the shared `connect_timeout`/`request_timeout` settings.
 - `test_gaia_api.py` (12) — all three endpoints via dependency overrides:
   success/invalid/empty/unavailable cone search, crossmatch
   success/ambiguous/invalid bodies, source detail 200/404/400, dependency wiring.
+- `test_gaia_source_association.py` (14) — Phase 3 source-level association:
+  unique match with the two id namespaces kept distinct, significance with
+  both/missing uncertainties, unmatched-not-forced, ambiguity preserving all
+  candidates, observation-epoch derivation (MJD → Julian year) and its
+  no-timestamp limitation, propagation via the derived epoch, unknown/Gaia-style
+  internal ids, cone-cache reuse, API 200/404/503, Phase 4 spectra listing
+  intact alongside association.
 
 Every Gaia Archive interaction is mocked; the default suite never touches the
 network (the same guarantee as the IRSA tests; live checks are `RUN_LIVE=1`
 opt-in and Gaia has none — the live verification was performed once during
-P5.0 and recorded in the research doc). Full suite: **282 passed, 6 skipped**
-(6 skips are opt-in live IRSA tests).
+P5.0 and recorded in the research doc). Full suite on the merged Phase 3/4
+base: **388 passed, 7 skipped** (7 skips are opt-in live IRSA tests).
 
 ## 13. Future work
 
 - Async UWS path for large bulk retrievals (verified endpoint, not needed yet).
-- Combined positional-uncertainty significance test in cross-matching.
-- `GET /api/v1/sources/{source_id}/catalogs` once Phase 3 defines the source schema.
+- Persistent cross-catalog association storage (and a
+  `POST /sources/{id}/catalogs/gaia/match` endpoint) if source records stop
+  being rebuilt by pipeline re-runs.
 - Parallax zero-point application (`gaiadr3.zeropoint`) if distance-sensitive
   features ever arrive (still without naive `1/ϖ`).

@@ -1870,7 +1870,7 @@ Deterministic suite (mocked HTTP, synthetic FITS fixtures, fixed seeds):
 uv run pytest -q
 ```
 
-Expected: **280 passed, 7 skipped** (the 7 skips are the opt-in live IRSA tests).
+Expected: **388 passed, 7 skipped** (the 7 skips are the opt-in live IRSA tests; includes the 73 Gaia DR3 tests from Phase 5).
 `compileall` and `pyflakes` are part of the fresh-install check.
 
 Phase 2 review additions:
@@ -1973,7 +1973,7 @@ timeline 126 products → 63 observations → 63 epochs, 33.81-day baseline,
 live service: 2 passed in 93 s | live API workflow: 1 passed in 73 s
 ```
 
-Phase 3 deterministic suite (`uv run pytest -q`, run twice): **280 passed, 7 skipped**
+Phase 3/4 + Phase 5 (Gaia) deterministic suite (`uv run pytest -q`): **388 passed, 7 skipped**
 in 34-57 s - the Phase 2 baseline plus 57 Phase 3 tests covering image preparation,
 detection, aperture photometry, uncertainty-aware association, variability, the target
 light-curve service, source persistence and the new API routes. The 7 skips are the

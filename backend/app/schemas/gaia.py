@@ -14,7 +14,7 @@ from a TAP ``long`` column and must survive JavaScript number handling untouched
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -186,3 +186,76 @@ class CrossMatchResponse(StrictModel):
 class GaiaSourceResponse(StrictModel):
     success: Literal[True] = True
     source: GaiaSource
+
+
+# -------------------------------------------------- Phase 3 source association
+class GaiaAssociationCandidate(StrictModel):
+    """One Gaia candidate for an internal Planet X source.
+
+    ``gaia_source_id`` is Gaia's numeric identifier (stringified TAP ``long``);
+    it is never the internal 32-hex Planet X ``source_id``.
+    """
+
+    gaia_source_id: str
+    separation_arcsec: float
+    separation_propagated_arcsec: float | None = None
+    source: GaiaSource
+
+
+class GaiaAssociationSignificance(StrictModel):
+    """Scalar positional-uncertainty statistic for the best candidate.
+
+    Assumptions (see ``method``/``assumptions``): independent Gaussian per-axis
+    errors, Rayleigh-distributed radial offset, no covariance terms and no
+    propagated-error growth. ``match_p_value`` is the probability of a separation
+    at least this large if the candidate were the true counterpart at zero
+    offset — it is not a probability of physical association.
+    """
+
+    method: str = "combined_scalar_sigma_rayleigh"
+    assumptions: tuple[str, ...] = (
+        "independent Gaussian per-axis errors (Phase 3 scatter and Gaia ra/dec errors)",
+        "no covariance terms and no propagated-error growth",
+        "position_scatter_arcsec is an empirical multi-epoch scatter, not a formal single-epoch error",
+    )
+    phase3_sigma_arcsec: float | None = None
+    gaia_sigma_arcsec: float | None = None
+    combined_sigma_arcsec: float | None = None
+    normalized_separation: float | None = None
+    match_p_value: float | None = None
+    limitation: str | None = None
+
+
+class GaiaAssociationEpoch(StrictModel):
+    """Observation epoch derived from the Phase 3 detections."""
+
+    julian_year: float | None = None
+    basis: str | None = None
+    detection_count: int = 0
+    limitation: str | None = None
+
+
+class SourceGaiaAssociationResponse(StrictModel):
+    """Gaia DR3 association for one persisted Phase 3 source.
+
+    ``planetx_source_id`` is the internal 32-hex identifier; every
+    ``gaia_source_id`` in ``candidates`` is Gaia's own numeric id. The two are
+    never interchangeable.
+    """
+
+    success: Literal[True] = True
+    planetx_source_id: str
+    reference_ra_deg: float
+    reference_dec_deg: float
+    status: MATCH_STATUS
+    candidates: list[GaiaAssociationCandidate]
+    best: GaiaAssociationCandidate | None = None
+    ambiguity_note: str | None = None
+    config: CrossMatchConfig
+    observation_epoch: GaiaAssociationEpoch
+    #: Whether/how Gaia's catalogue position was propagated to the observation
+    # epoch (missing PM, no epoch, ... is reported in ``limitation``).
+    propagation: CrossMatchEpochInfo
+    significance: GaiaAssociationSignificance
+    phase3: dict[str, Any] | None = None
+    provenance: GaiaProvenance | None = None
