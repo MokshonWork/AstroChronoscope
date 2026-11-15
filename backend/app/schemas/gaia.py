@@ -214,7 +214,9 @@ class GaiaAssociationSignificance(StrictModel):
 
     method: str = "combined_scalar_sigma_rayleigh"
     assumptions: tuple[str, ...] = (
-        "independent Gaussian per-axis errors (Phase 3 scatter and Gaia ra/dec errors)",
+        "independent Gaussian per-axis errors; the reported phase3/gaia sigmas are "
+        "radial-RMS uncertainties and combined_sigma_arcsec is their isotropic "
+        "per-axis equivalent (radial RMS / sqrt(2))",
         "no covariance terms and no propagated-error growth",
         "position_scatter_arcsec is an empirical multi-epoch scatter, not a formal single-epoch error",
     )

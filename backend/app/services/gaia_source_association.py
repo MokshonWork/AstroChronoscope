@@ -147,7 +147,17 @@ class SourceGaiaAssociationService:
     def _significance(
         self, phase3_sigma_arcsec: float | None, best
     ) -> GaiaAssociationSignificance:
-        """Scalar positional significance for the best candidate (or None data)."""
+        """Scalar positional significance for the best candidate (or None data).
+
+        ``phase3_sigma_arcsec`` and the Gaia ``hypot(ra_error, dec_error)`` are
+        *radial RMS* uncertainties (Phase 3's scatter is the RMS great-circle
+        offset of detections from the reference position; Gaia's per-axis errors
+        combine to the radial RMS E[D²]^½). The Rayleigh tail
+        ``exp(-d²/(2σ²))`` needs the *per-axis* sigma, whose isotropic
+        equivalent is the radial RMS divided by √2 — hence the ``/sqrt(2)``.
+        Without it the exponent is halved and ``match_p_value`` is biased high
+        (significance understated).
+        """
         info = GaiaAssociationSignificance(
             phase3_sigma_arcsec=phase3_sigma_arcsec,
         )
@@ -158,6 +168,7 @@ class SourceGaiaAssociationService:
         ra_error = gaia.coordinates.ra_error_mas
         dec_error = gaia.coordinates.dec_error_mas
         if ra_error is not None and dec_error is not None:
+            # radial RMS in arcsec (per-axis errors combine to E[D²]^½)
             info.gaia_sigma_arcsec = math.hypot(ra_error, dec_error) / 1000.0
         if phase3_sigma_arcsec is None and info.gaia_sigma_arcsec is None:
             info.limitation = (
@@ -168,15 +179,17 @@ class SourceGaiaAssociationService:
         # Use whichever uncertainties exist; the combination is only possible
         # with both, and a single-source approximation is stated as such.
         if phase3_sigma_arcsec is not None and info.gaia_sigma_arcsec is not None:
-            info.combined_sigma_arcsec = math.hypot(phase3_sigma_arcsec, info.gaia_sigma_arcsec)
+            info.combined_sigma_arcsec = math.hypot(phase3_sigma_arcsec, info.gaia_sigma_arcsec) / math.sqrt(2.0)
         else:
-            info.combined_sigma_arcsec = phase3_sigma_arcsec or info.gaia_sigma_arcsec
+            radial = phase3_sigma_arcsec or info.gaia_sigma_arcsec
+            info.combined_sigma_arcsec = radial / math.sqrt(2.0)
             info.assumptions = info.assumptions + (
                 "only one of the two uncertainty sources was available; the "
                 "combined sigma is that single value",
             )
         info.normalized_separation = best.separation_arcsec / info.combined_sigma_arcsec
-        # Rayleigh tail: P(D >= d) for 2-D Gaussian offset with per-axis sigma.
+        # Rayleigh tail: P(D >= d) for a 2-D Gaussian offset with the isotropic
+        # per-axis sigma derived from the radial-RMS inputs above.
         ratio = best.separation_arcsec / info.combined_sigma_arcsec
         info.match_p_value = math.exp(-0.5 * ratio * ratio)
         return info

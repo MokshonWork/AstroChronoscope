@@ -272,17 +272,19 @@ underlying Gaia cone queries are cached in `CacheStore.gaia` as usual.
   samples), reported with its explicit `basis` string. When the record has no
   timestamps the field is `null` with a `limitation`, and the Gaia catalogue
   position (J2016.0) is used unpropagated — never implied to be epoch-aligned.
-- **Significance** (`significance`): scalar positional-uncertainty statistic
-  (Phase 3's `position_scatter_arcsec` has no covariance matrix and Gaia DR3
-  gives scalar `ra_error`/`dec_error`):
-  `sigma_gaia = hypot(ra_error, dec_error)/1000 [arcsec]`,
-  `sigma_comb = hypot(phase3_scatter, sigma_gaia)`,
-  `normalized_separation = separation / sigma_comb`,
-  `match_p_value = exp(-d²/(2·sigma_comb²))` — the Rayleigh tail for a 2-D
+- **Significance** (`significance`): scalar positional-uncertainty statistic.
+  Both inputs are *radial-RMS* uncertainties — Phase 3's
+  `position_scatter_arcsec` is the RMS great-circle offset of the detections
+  from the reference position, and Gaia's per-axis `ra_error`/`dec_error`
+  combine to the radial RMS `hypot(ra_error, dec_error)` — while the Rayleigh
+  tail is defined on the *per-axis* sigma. The combined per-axis (isotropic
+  equivalent) sigma is therefore
+  `sigma_comb = hypot(phase3_scatter, sigma_gaia) / √2`, and
+  `match_p_value = exp(-d²/(2·sigma_comb²))` is the Rayleigh tail for a 2-D
   Gaussian offset with independent per-axis errors. Assumptions are returned on
   the response; when only one uncertainty source exists the combined sigma is
-  that single value and the assumption is stated. When the data needed are
-  missing the statistic is `null` with a `limitation` — **nothing is
+  that single value (also /√2) and the assumption is stated. When the data
+  needed are missing the statistic is `null` with a `limitation` — **nothing is
   fabricated**. It is not a probability of physical association. RUWE is never
   used as positional uncertainty or as a rejection rule.
 - `phase3` echoes the source context (epoch/detection counts, bands, scatter,

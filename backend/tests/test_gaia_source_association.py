@@ -198,9 +198,12 @@ def test_significance_uses_both_uncertainties(association_env) -> None:
     response = service.associate(_SOURCE_ID)
 
     sig = response.significance
-    # Gaia sigma: hypot(50, 50) mas = 70.7 mas = 0.0707"; combined with 0.3".
+    # Inputs are radial RMS: Gaia hypot(50, 50) mas = 70.7 mas = 0.0707";
+    # combined per-axis equivalent = hypot(0.3, 0.0707)/sqrt(2).
     assert sig.gaia_sigma_arcsec == pytest.approx(0.07071067811865476, rel=1e-9)
-    assert sig.combined_sigma_arcsec == pytest.approx((0.3**2 + 0.07071067811865476**2) ** 0.5, rel=1e-9)
+    assert sig.combined_sigma_arcsec == pytest.approx(
+        (0.3**2 + 0.07071067811865476**2) ** 0.5 / 2**0.5, rel=1e-9
+    )
     assert sig.normalized_separation is not None and sig.normalized_separation >= 0.0
     assert 0.0 < sig.match_p_value <= 1.0
     assert any("independent" in item for item in sig.assumptions)
@@ -310,6 +313,72 @@ def test_unknown_and_gaia_style_ids_follow_the_phase3_contract(association_env) 
         service.associate("f" * 32)          # well-formed but unknown
     with pytest.raises(SourceNotFoundError):
         service.associate(_GAIA_STYLE_ID)    # a Gaia-style id is not an internal id
+
+
+def test_significance_p_value_matches_the_rayleigh_tail(association_env) -> None:
+    """Pin the corrected Rayleigh tail: seed the source exactly one combined
+    per-axis sigma away, so p must equal exp(-0.5) ~= 0.60653."""
+    import math
+
+    install, settings, cache = association_env
+    sigma_comb = (0.3**2 + 0.07071067811865476**2) ** 0.5 / 2**0.5  # ~0.2179"
+    offset_ra_deg = (sigma_comb / 3600.0) / math.cos(math.radians(TARGET_DEC))
+    service, _stub = _wire(install, [_gaia_source(ra=TARGET_RA + offset_ra_deg, dec=TARGET_DEC, source_id=9)])
+    _seed_source(settings, cache, position_scatter_arcsec=0.3)
+
+    response = service.associate(_SOURCE_ID)
+
+    assert response.status == "MATCHED"
+    assert response.significance.match_p_value == pytest.approx(math.exp(-0.5), rel=1e-6)
+
+
+def test_significance_falls_back_to_phase3_only_when_one_gaia_error_is_missing(association_env) -> None:
+    install, settings, cache = association_env
+    service, _stub = _wire(
+        install,
+        [_gaia_source(ra=TARGET_RA, dec=TARGET_DEC, source_id=10, ra_error_mas=50.0, dec_error_mas=None)],
+    )
+    _seed_source(settings, cache, position_scatter_arcsec=0.3)
+
+    response = service.associate(_SOURCE_ID)
+
+    sig = response.significance
+    assert sig.gaia_sigma_arcsec is None  # one missing Gaia error -> Gaia term unusable
+    assert sig.combined_sigma_arcsec == pytest.approx(0.3 / 2**0.5, rel=1e-9)
+    assert any("only one of the two uncertainty sources" in item for item in sig.assumptions)
+    assert 0.0 < sig.match_p_value <= 1.0
+
+
+def test_propagated_match_significance_uses_the_propagated_separation(association_env) -> None:
+    """A candidate matched only via propagation must not get its significance
+    from the huge unpropagated offset."""
+    import math
+
+    from app.services.catalog_crossmatch import epoch_propagation
+
+    install, settings, cache = association_env
+    star = _gaia_source(ra=TARGET_RA, dec=TARGET_DEC, source_id=14, pmra=-500.0, pmdec=200.0)
+    moved = epoch_propagation(star, 2026.3730869267624)
+    service, _stub = _wire(install, [star])
+    # Seed the source within 0.5" of where the star propagates TO, with a tight
+    # scatter so the unpropagated offset (~7") would give a tiny p-value.
+    _seed_source(
+        settings,
+        cache,
+        ra=moved.propagated_ra + math.radians(0.5 / 3600.0) / math.cos(math.radians(TARGET_DEC)),
+        dec=moved.propagated_dec,
+        time_mjd=61177.27,
+        position_scatter_arcsec=0.3,
+    )
+
+    response = service.associate(_SOURCE_ID)
+
+    assert response.propagation.propagated is True
+    assert response.status == "MATCHED"
+    # separation_arcsec is the propagated separation (~0.5"), not the
+    # unpropagated ~7" one - the normalized separation must reflect that.
+    assert response.best.separation_arcsec < 1.0
+    assert response.significance.normalized_separation < 1.0
 
 
 def test_cone_query_is_cached_across_association_calls(association_env) -> None:

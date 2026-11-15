@@ -76,15 +76,22 @@ merge commit on this branch: `5d6d81f`). Every statement below is based on the
 
 ## 6. Uncertainty-aware match evaluation (P5.5) — method and assumptions
 
-Given Phase 3's scalar `position_scatter_arcsec` (σ_px) and Gaia's scalar
-`ra_error`, `dec_error` (mas):
+Given Phase 3's scalar `position_scatter_arcsec` (a **radial RMS** — the RMS
+great-circle offset of detections from the reference position) and Gaia's
+per-axis `ra_error`, `dec_error` (mas; their quadrature sum is likewise the
+radial RMS `hypot(ra_error, dec_error)`):
 
 ```
-sigma_gaia  = sqrt(ra_error² + dec_error²) / 1000   [arcsec]
-sigma_comb  = sqrt(σ_px² + sigma_gaia²)             [arcsec]
+sigma_gaia_radial = hypot(ra_error, dec_error) / 1000        [arcsec]
+sigma_comb        = hypot(scatter, sigma_gaia_radial) / √2   [arcsec]
 normalized_separation = separation / sigma_comb
-match_p_value         = exp(-separation² / (2 · sigma_comb²))
+match_p_value     = exp(-separation² / (2 · sigma_comb²))
 ```
+
+The `√2` converts the radial-RMS inputs to the isotropic **per-axis** sigma the
+Rayleigh tail `exp(-d²/(2σ²))` is defined on (for a 2-D Gaussian, radial RMS =
+per-axis σ·√2); without it the exponent is halved and the p-value is biased
+high (significance understated).
 
 Assumptions, stated on the response (`method`, `assumptions`):
 
