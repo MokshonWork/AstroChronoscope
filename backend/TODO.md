@@ -323,3 +323,72 @@ Single source of truth for backend progress. Updated at the end of each phase.
 - **Known limitation (unchanged).** PSF matching is a global Gaussian approximation;
   spatially varying PSFs and empirical-kernel resampling are unsupported. Variance
   propagation is per-pixel only; output covariance is not computed.
+
+## N. Phase 5 — Gaia DR3 Catalog Integration (2026-11-15)
+
+- [x] Investigate the backend architecture and the official Gaia Archive interface
+      before implementation (P5.0; research in `docs/GAIA_INTEGRATION_RESEARCH.md`,
+      every fact verified live against `gea.esac.esa.int` TAP on 2026-11-15).
+- [x] Verify TAP sync endpoint, request/response shape, error VOTable shape, HTTP
+      status mapping, `gaiadr3.gaia_source` columns/units via `TAP_SCHEMA`, ADQL
+      `CONTAINS(POINT, CIRCLE)` / `DISTANCE` / `ORDER BY`, anonymous access.
+- [x] Implement the Gaia TAP client with centralized, validated ADQL construction
+      (no user string ever interpolated), Retry session, timeout and error mapping.
+- [x] Implement cone search with coordinate/radius/magnitude/limit validation and
+      spherical separation (haversine, verified against Astropy).
+- [x] Normalize catalog responses: units preserved, missing values `null` (never 0),
+      `source_id` as string, provenance on every record, reference epoch J2016.0.
+- [x] Implement cross-matching: configurable radius, MATCHED/AMBIGUOUS/UNMATCHED,
+      ambiguity never forced, nearest candidate only when unambiguous.
+- [x] Implement optional proper-motion epoch propagation via Astropy
+      `apply_space_motion` (`pmra` = μα\*), preserving original and propagated
+      coordinates and reporting limitations explicitly.
+- [x] Expose REST endpoints `GET /api/v1/catalogs/gaia/search`,
+      `POST /api/v1/catalogs/gaia/crossmatch`, `GET /api/v1/catalogs/gaia/{source_id}`.
+- [x] Integrate caching via the existing TTL `CacheStore` (additive `gaia` cache;
+      only successful responses cached).
+- [x] Mocked deterministic tests for client, service, cross-match and API paths
+      (59 new tests; no default-suite network access).
+- [x] Run the full Phase 1–2 suite: **282 passed, 6 skipped** (baseline 223 + 59
+      new; the 6 skips are the opt-in live IRSA tests) — no regression.
+- [x] Documentation: `docs/GAIA_INTEGRATION.md`, README scope note/API §4.11/error
+      codes/test counts, this validation log.
+- [ ] `GET /api/v1/sources/{source_id}/catalogs` — deferred to Phase 3 (no internal
+      source schema exists yet; none was invented).
+
+## Validation log (2026-11-15, Phase 5 Gaia integration)
+
+- **Live interface.** Sync TAP verified: form-encoded
+  `REQUEST=doQuery, LANG=ADQL, FORMAT=json`; success body
+  `{"metadata": [...], "data": [[...]]}`; ADQL parse errors → HTTP 400 with VOTable
+  `QUERY_STATUS=ERROR`; 429 observed handling mapped to `GAIA_RATE_LIMITED`;
+  anonymous access confirmed; async UWS `/tap/async` job creation verified (documented,
+  not implemented — bounded sync queries suffice). `ref_epoch = 2016.0` confirmed in
+  real rows; `pmra` unit `mas.yr**-1` including cos δ confirmed via `TAP_SCHEMA`.
+- **Live smoke test.** Cone search at (156.09328159, −41.64466331) r=60″ returned
+  5 fully normalized DR3 sources (astrometry, photometry, provenance, separations);
+  `get_source` round-trip matched the cone-search record.
+- **Separation correctness.** Haversine implementation equals
+  `astropy SkyCoord.separation` on wraparound and near-pole cases (RA 0→90° at
+  dec 89.9° ≈ 509″; RA 0→180° at dec 89.99° ≈ 72″ — Euclidean would give ~324000″
+  and 648000″).
+- **Epoch propagation.** Astropy 8.0.2 `apply_space_motion` verified with and
+  without parallax distance (ERFA `pmsafe` "distance overridden" warning suppressed
+  in code, negligible for decade-scale arcsecond-per-decade motions); pmra=−500,
+  pmdec=300 mas/yr over 10 yr yields a several-arcsecond displacement as expected;
+  an epoch-shifted fast mover (pmra=−1440 mas/yr) is matched via propagation.
+- **Tests.** `pytest -q` → **282 passed, 6 skipped**. New: `test_gaia_client.py` (14),
+  `test_gaia_service.py` (18), `test_gaia_crossmatch.py` (16), `test_gaia_api.py` (12).
+  One existing assertion in `test_integration_contract.py` was extended additively
+  with the three new OpenAPI paths; no Phase 1–2 test weakened.
+- **Lint/compile.** `compileall app scripts tests` and `pyflakes app scripts tests` → clean.
+- **Frontend.** `git diff upstream/main -- src public index.html package.json
+  pnpm-lock.yaml vite.config.ts tsconfig*.json .oxlintrc.json` → empty (untouched).
+- **Dependencies.** None added or changed (`pyproject.toml`, `uv.lock`,
+  `requirements.txt` untouched); Astropy and requests reuse the existing pins.
+- **Git.** Branch `backend/phase-5-gaia-integration` from
+  `origin/backend/phase-1-2-integration` (7d0db7f); not pushed, no PR (not authorized).
+- **Known limitations.** Candidate recall is bounded by the propagation margin for
+  the fastest movers; target positional uncertainty is accepted but not yet folded
+  into a joint significance test; parallax zero points not applied; RUWE preserved
+  as an indicator only; parallax→distance never computed.

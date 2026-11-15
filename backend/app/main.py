@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.deps import get_irsa_client
 from app.api.file_routes import router as file_router
+from app.api.gaia_routes import router as gaia_router
 from app.api.image_routes import router as image_router
 from app.api.observation_routes import router as observation_router
 from app.api.timeline_routes import router as timeline_router
@@ -62,6 +63,7 @@ app.include_router(observation_router, prefix=_settings.api_prefix)
 app.include_router(file_router, prefix=_settings.api_prefix)
 app.include_router(timeline_router, prefix=_settings.api_prefix)
 app.include_router(image_router, prefix=_settings.api_prefix)
+app.include_router(gaia_router, prefix=_settings.api_prefix)
 
 
 @app.get("/", tags=["ops"], summary="Frontend connectivity check")

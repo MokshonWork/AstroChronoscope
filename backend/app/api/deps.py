@@ -8,6 +8,9 @@ from fastapi import Depends
 
 from app.core.cache import CacheStore
 from app.core.config import Settings, get_settings
+from app.services.gaia_client import GaiaClient
+from app.services.gaia_service import GaiaService
+from app.services.catalog_crossmatch import CatalogCrossMatcher
 from app.services.irsa_client import IrsaClient
 from app.services.image_comparison import ImageComparisonService
 from app.services.observation_service import ObservationService
@@ -28,6 +31,25 @@ def get_irsa_client() -> IrsaClient:
 def get_cache_store() -> CacheStore:
     settings = get_settings_dep()
     return CacheStore(settings.cache_ttl_seconds, settings.cache_max_entries)
+
+
+@lru_cache
+def get_gaia_client() -> GaiaClient:
+    return GaiaClient(get_settings_dep())
+
+
+def get_gaia_service(
+    client: GaiaClient = Depends(get_gaia_client),
+    cache: CacheStore = Depends(get_cache_store),
+    settings: Settings = Depends(get_settings_dep),
+) -> GaiaService:
+    return GaiaService(client, cache, settings)
+
+
+def get_catalog_crossmatcher(
+    service: GaiaService = Depends(get_gaia_service),
+) -> CatalogCrossMatcher:
+    return CatalogCrossMatcher(service)
 
 
 def get_observation_service(

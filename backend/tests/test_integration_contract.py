@@ -186,6 +186,9 @@ def test_openapi_documents_all_public_routes(api) -> None:
         "/api/v1/images/compare",
         "/api/v1/images/comparisons/{comparison_id}",
         "/api/v1/files/{filename}",
+        "/api/v1/catalogs/gaia/search",
+        "/api/v1/catalogs/gaia/crossmatch",
+        "/api/v1/catalogs/gaia/{source_id}",
     }
 
 
