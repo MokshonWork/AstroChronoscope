@@ -18,6 +18,7 @@ from app.api.image_routes import router as image_router
 from app.api.lightcurve_routes import router as lightcurve_router
 from app.api.observation_routes import router as observation_router
 from app.api.source_routes import router as source_router
+from app.api.spectral_routes import router as spectral_router
 from app.api.timeline_routes import router as timeline_router
 from app.core.config import get_settings
 from app.core.exceptions import PlanetXError
@@ -46,7 +47,8 @@ app = FastAPI(
         "Genuine SPHEREx observations from NASA/IPAC IRSA: SIA2 discovery, IBE cutouts, "
         "science IMAGE extraction, celestial WCS validation, PNG previews, multi-epoch "
         "timelines, validated pairwise image comparison, source detection, aperture "
-        "photometry, cross-epoch association and per-band light curves with variability metrics."
+        "photometry, cross-epoch association, per-band light curves with variability metrics, "
+        "and DR1 cube spectral extraction, inspection and comparison."
     ),
     lifespan=lifespan,
 )
@@ -67,6 +69,7 @@ app.include_router(timeline_router, prefix=_settings.api_prefix)
 app.include_router(image_router, prefix=_settings.api_prefix)
 app.include_router(source_router, prefix=_settings.api_prefix)
 app.include_router(lightcurve_router, prefix=_settings.api_prefix)
+app.include_router(spectral_router, prefix=_settings.api_prefix)
 
 
 @app.get("/", tags=["ops"], summary="Frontend connectivity check")

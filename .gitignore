@@ -49,9 +49,11 @@ htmlcov/
 backend/storage/fits/*
 backend/storage/previews/*
 backend/storage/comparisons/*
+backend/storage/spectra/*
 !backend/storage/fits/.gitkeep
 !backend/storage/previews/.gitkeep
 !backend/storage/comparisons/.gitkeep
+!backend/storage/spectra/.gitkeep
 
 # OS metadata
 .DS_Store
