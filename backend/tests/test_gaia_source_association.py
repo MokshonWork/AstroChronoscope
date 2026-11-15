@@ -255,6 +255,8 @@ def test_ambiguous_candidates_are_all_preserved(association_env) -> None:
     assert len(response.candidates) == 2
     assert {c.gaia_source_id for c in response.candidates} == {"11", "12"}
     assert response.ambiguity_note
+    assert response.significance.match_p_value is None
+    assert "ambiguous" in response.significance.limitation
 
 
 def test_observation_epoch_derived_from_detection_timestamps(association_env) -> None:
@@ -379,6 +381,46 @@ def test_propagated_match_significance_uses_the_propagated_separation(associatio
     # unpropagated ~7" one - the normalized separation must reflect that.
     assert response.best.separation_arcsec < 1.0
     assert response.significance.normalized_separation < 1.0
+
+
+def test_epoch_sampling_cap_takes_the_most_recent_200_timestamps(association_env) -> None:
+    from astropy.time import Time
+
+    from app.schemas.lightcurve import MatchedDetection
+    from app.schemas.photometry import FluxMeasurement
+
+    install, settings, cache = association_env
+    service, _stub = _wire(install, [])
+    # 201 detections: the first is a far-past outlier (MJD 40000), the rest sit
+    # at MJD 60001..60200. The cap must keep the LAST 200 (mean 60100.5); if it
+    # kept the first 200 instead, the outlier would drag the mean to ~59050.
+    detections = [
+        MatchedDetection(
+            measurement=FluxMeasurement(
+                detection_id=f"det-{i}", observation_id=f"obs-{i}",
+                time_mjd=40000.0 if i == 0 else 60000.0 + i,
+                x=10.0, y=10.0, aperture_radius_px=6.0, aperture_area_px=113.0,
+                aperture_valid_fraction=1.0, psf_fwhm_px=2.0, fwhm_source="psf",
+                quality="PASS",
+            ),
+            epoch_key=f"e{i}",
+        )
+        for i in range(201)
+    ]
+    record = _seed_source(settings, cache, time_mjd=None)
+    record.source.detections = detections  # test-only injection on the returned record
+    SourceCatalogService(settings, cache)._write(  # noqa: SLF001
+        settings.sources_dir / f"{_SOURCE_ID}.json", record
+    )
+    cache.sources.set(_SOURCE_ID, None)  # drop the cached record so it re-reads
+
+    response = service.associate(_SOURCE_ID)
+
+    assert response.observation_epoch.detection_count == 200
+    assert response.observation_epoch.julian_year == pytest.approx(
+        float(Time(60100.5, format="mjd").jyear), abs=1e-6
+    )
+    assert "200" in response.observation_epoch.basis
 
 
 def test_cone_query_is_cached_across_association_calls(association_env) -> None:

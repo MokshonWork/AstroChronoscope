@@ -96,7 +96,12 @@ class SourceGaiaAssociationService:
             else None
         )
 
-        significance = self._significance(source.position_scatter_arcsec, result.best)
+        significance = self._significance(
+            source.position_scatter_arcsec,
+            result.best,
+            status=result.status,
+            n_candidates=len(result.candidates),
+        )
 
         return SourceGaiaAssociationResponse(
             planetx_source_id=source.source_id,
@@ -145,7 +150,12 @@ class SourceGaiaAssociationService:
         )
 
     def _significance(
-        self, phase3_sigma_arcsec: float | None, best
+        self,
+        phase3_sigma_arcsec: float | None,
+        best,
+        *,
+        status: str = "UNMATCHED",
+        n_candidates: int = 0,
     ) -> GaiaAssociationSignificance:
         """Scalar positional significance for the best candidate (or None data).
 
@@ -162,7 +172,13 @@ class SourceGaiaAssociationService:
             phase3_sigma_arcsec=phase3_sigma_arcsec,
         )
         if best is None:
-            info.limitation = "No candidate inside the match radius; significance not evaluated"
+            if status == "AMBIGUOUS":
+                info.limitation = (
+                    f"Match is ambiguous ({n_candidates} candidates within the radius, no unique "
+                    "best); significance is not evaluated for a non-unique counterpart"
+                )
+            else:
+                info.limitation = "No candidate inside the match radius; significance not evaluated"
             return info
         gaia = best.source
         ra_error = gaia.coordinates.ra_error_mas
