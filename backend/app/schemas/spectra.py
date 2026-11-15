@@ -24,6 +24,7 @@ from pydantic import Field, model_validator
 
 from app.core.versions import SPECTRAL_ALGORITHM_VERSION
 from app.schemas.common import StrictModel
+from app.schemas.image_processing import HduInfo, WcsValidation
 
 SpectralQuality = Literal["PASS", "WARNING", "FAIL", "NOT_VERIFIED"]
 
@@ -149,6 +150,67 @@ class SpectralExtractionResponse(StrictModel):
     provenance: SpectralProvenance
 
 
+class SpectralChannelsInfo(StrictModel):
+    """Summary of the product's spectral axis, not the extracted channels."""
+
+    available: bool = False
+    source: Literal["SPECTRAL_CHANNELS", "WCS-WAVE", "none"] = "none"
+    channel_count: int | None = Field(None, ge=0)
+    wavelength_unit: WavelengthUnit | None = None
+    wavelength_min_um: float | None = None
+    wavelength_max_um: float | None = None
+    monotonic: bool | None = None
+    blank_channels: list[int] = Field(default_factory=list)
+    detectors: list[int] = Field(default_factory=list)
+    has_bandwidth: bool = False
+    has_resolving_power: bool = False
+
+
+class SpectralImageWavelength(StrictModel):
+    """WCS-WAVE result for a spectral-image pixel (one channel, not a spectrum)."""
+
+    method: Literal["bilinear_wcs_wave", "unavailable"] = "unavailable"
+    wavelength_um: float | None = None
+    bandwidth_um: float | None = None
+    message: str | None = None
+
+
+class SpectralMetadata(StrictModel):
+    collection: str | None = None
+    obs_id: str | None = None
+    obs_publisher_did: str | None = None
+    date_obs: str | None = None
+    t_min_mjd: float | None = None
+    t_max_mjd: float | None = None
+    npix: int | None = Field(None, description="HEALPix tile index for a cube product")
+    order: int | None = Field(None, description="HEALPix order for a cube product")
+
+
+class SpectralInspection(StrictModel):
+    """What a spectral product actually supports; missing data is never inferred."""
+
+    product_format: Literal["cube", "spectral_image", "unsupported"]
+    source: Literal["product", "cutout"] = "product"
+    source_url: str | None = None
+    fits_sha256: str
+    shape: list[int] | None = None
+    spatial_shape: list[int] | None = None
+    bunit: str | None = None
+    hdus: list[HduInfo] = Field(default_factory=list)
+    channels: SpectralChannelsInfo = Field(default_factory=SpectralChannelsInfo)
+    wcs: WcsValidation
+    spectral_image_wavelength: SpectralImageWavelength | None = None
+    flags_available: bool = False
+    variance_available: bool = False
+    nhits_available: bool = False
+    flag_bit_definitions: dict[str, str] = Field(default_factory=dict)
+    flag_bits: dict[str, int] = Field(default_factory=dict, description="Flag name to bit value")
+    invalid_flag_bits: list[int] = Field(default_factory=list)
+    metadata: SpectralMetadata = Field(default_factory=SpectralMetadata)
+    quality: SpectralQuality
+    warnings: list[str] = Field(default_factory=list)
+
+
 class SpectralSummary(StrictModel):
     """Light-weight spectrum view for source listings; never includes channels."""
 
@@ -179,6 +241,12 @@ class SpectralComparisonConfig(StrictModel):
         le=102,
         description="Minimum number of jointly valid channels required to report a comparison",
     )
+    wavelength_tolerance_um: float = Field(
+        1e-4,
+        gt=0.0,
+        le=1.0,
+        description="Maximum separation for pairing two channels on the same wavelength grid",
+    )
 
 
 class SpectralComparisonRequest(StrictModel):
@@ -195,11 +263,20 @@ class SpectralComparisonChannel(StrictModel):
     flux_b_mjy_sr: float | None = None
     difference_mjy_sr: float | None = None
     ratio: float | None = None
+    quality: SpectralQuality = "PASS"
 
 
 class SpectralComparison(StrictModel):
     spectrum_id_a: str
     spectrum_id_b: str
+    product_id_a: str | None = None
+    product_id_b: str | None = None
+    comparison_basis: Literal[
+        "same_spectrum",
+        "same_product_static_mosaic",
+        "different_products_static_mosaic",
+        "unknown",
+    ] = "unknown"
     grid_compatible: bool
     wavelength_unit: WavelengthUnit = "um"
     flux_unit: FluxUnit = "MJy/sr"
@@ -207,6 +284,9 @@ class SpectralComparison(StrictModel):
     channels: list[SpectralComparisonChannel] = Field(default_factory=list)
     quality: SpectralQualitySummary
     warnings: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    algorithm_version: str = SPECTRAL_ALGORITHM_VERSION
+    created_at: str | None = None
 
 
 class SpectralComparisonResponse(StrictModel):
@@ -234,9 +314,13 @@ __all__ = [
     "SpectralComparisonConfig",
     "SpectralComparisonRequest",
     "SpectralComparisonResponse",
+    "SpectralChannelsInfo",
     "SpectralExtractionConfig",
     "SpectralExtractionRequest",
     "SpectralExtractionResponse",
+    "SpectralImageWavelength",
+    "SpectralInspection",
+    "SpectralMetadata",
     "SpectralProvenance",
     "SpectralQuality",
     "SpectralQualitySummary",
